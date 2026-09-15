@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { LoginSchema } from '@servicedesk/shared';
 import { prisma } from '../../lib/db.js';
 import { signAccessToken, signRefreshToken, verifyPassword, verifyRefreshToken } from '../../lib/auth.js';
@@ -9,8 +10,23 @@ import { requireAuth } from '../../middleware/requireAuth.js';
 
 export const authRouter = Router();
 
+// §56 "rate limiting where appropriate" — /auth/login is the one unauthenticated endpoint that
+// takes a password, so it's the brute-force target. Keyed by IP. The limit is deliberately
+// generous (not the ~10/15min a public-facing login would use) because this is an internal
+// tool assumed to sit behind a corporate network/VPN, and because the committed Playwright
+// suite logs in dozens of times per run from one IP — a tight limit would make CI flaky rather
+// than making the app safer. Tune LOGIN_RATE_LIMIT down for an internet-facing deployment.
+const loginRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.LOGIN_RATE_LIMIT ?? 200),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: { message: 'Too many login attempts. Please try again later.' } },
+});
+
 authRouter.post(
   '/login',
+  loginRateLimit,
   asyncHandler(async (req, res) => {
     const parsed = LoginSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest('Invalid login payload', parsed.error.flatten());

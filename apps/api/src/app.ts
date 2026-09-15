@@ -9,6 +9,7 @@ import { attentionRouter } from './modules/attention/routes.js';
 import { dashboardRouter } from './modules/dashboard/routes.js';
 import { reportsRouter } from './modules/reports/routes.js';
 import { attachmentsRouter } from './modules/attachments/routes.js';
+import { legacyImportRouter } from './modules/legacyImport/routes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 export function createApp() {
@@ -30,6 +31,7 @@ export function createApp() {
   app.use('/attention', attentionRouter);
   app.use('/dashboard', dashboardRouter);
   app.use('/reports', reportsRouter);
+  app.use('/legacy-import', legacyImportRouter);
 
   app.use(errorHandler);
   return app;

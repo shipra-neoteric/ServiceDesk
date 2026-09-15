@@ -164,6 +164,41 @@ export const useCreateReasonCode = () => {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['masters', 'reason-codes'] }),
   });
 };
+// ---- Legacy FMS import ----
+export interface LegacyImportRow {
+  id: string;
+  rowNumber: number;
+  status: 'PENDING' | 'IMPORTED' | 'SKIPPED' | 'AMBIGUOUS' | 'DUPLICATE' | 'FAILED';
+  legacyRef: string | null;
+  matchedJobCardId: string | null;
+  reasonText: string | null;
+}
+export interface LegacyImportBatch {
+  id: string;
+  sourceSheet: string;
+  importedAt: string;
+  imported: number;
+  skipped: number;
+  ambiguous: number;
+  duplicate: number;
+  failed: number;
+  warnings: string[];
+  rows?: LegacyImportRow[];
+}
+export const useLegacyImportBatches = () =>
+  useQuery({ queryKey: ['legacy-import'], queryFn: async () => (await apiClient.get<LegacyImportBatch[]>('/legacy-import')).data });
+export const useUploadLegacyImport = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return (await apiClient.post<LegacyImportBatch>('/legacy-import', form, { headers: { 'Content-Type': 'multipart/form-data' } })).data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['legacy-import'] }),
+  });
+};
+
 export const useUpdateReasonCode = () => {
   const qc = useQueryClient();
   return useMutation({

@@ -1,8 +1,18 @@
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 
-const ACCESS_SECRET = process.env.JWT_ACCESS_SECRET ?? 'dev-access-secret';
-const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET ?? 'dev-refresh-secret';
+// No hardcoded fallback: index.ts's requireEnv() already exits the process before this module
+// signs/verifies anything in the real server, but a silent 'dev-access-secret' default here
+// would still be a live footgun for any other entrypoint (a script, a future serverless
+// handler) that imports this module without going through that startup check. Fail loudly
+// instead — vitest.config.ts / apps/api/.env supply real values for tests and dev.
+function requireSecret(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is not set. Copy apps/api/.env.example to .env first.`);
+  return value;
+}
+const ACCESS_SECRET = requireSecret('JWT_ACCESS_SECRET');
+const REFRESH_SECRET = requireSecret('JWT_REFRESH_SECRET');
 
 export interface AccessTokenPayload {
   sub: string; // userId

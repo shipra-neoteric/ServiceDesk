@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Trash2 } from 'lucide-react';
@@ -31,10 +31,14 @@ import {
   useReasonCodes,
   useCreateReasonCode,
   useUpdateReasonCode,
+  useLegacyImportBatches,
+  useUploadLegacyImport,
   type ReasonCode,
+  type LegacyImportRow,
+  type LegacyImportBatch,
 } from './api';
 
-const TABS = ['Organization & Work', 'Holiday Calendar', 'Workflow Templates', 'SLA Rules', 'Escalation Rules', 'Reasons'] as const;
+const TABS = ['Organization & Work', 'Holiday Calendar', 'Workflow Templates', 'SLA Rules', 'Escalation Rules', 'Reasons', 'Legacy Import'] as const;
 type Tab = (typeof TABS)[number];
 
 function InlineCreate({ onCreate, placeholder }: { onCreate: (name: string, code: string) => Promise<void>; placeholder: string }) {
@@ -612,6 +616,125 @@ function ReasonsTab() {
   );
 }
 
+function LegacyImportTab() {
+  const { push } = useToast();
+  const { data: batches, isLoading } = useLegacyImportBatches();
+  const upload = useUploadLegacyImport();
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card header={<h2 className="text-base font-semibold">Legacy FMS Import</h2>}>
+        <p className="mb-4 text-sm text-content-muted dark:text-content-dark-muted">
+          Upload a CSV export of the old FIR Card / Work Capture FMS sheet. Column headers are matched against a documented set of aliases (see
+          MIGRATION_FMS.md) — rows whose Project/Category/Job Type can&rsquo;t be confidently matched are marked <strong>Ambiguous</strong> rather than
+          guessed. Re-uploading the same file is safe: already-imported rows are detected as <strong>Duplicate</strong> and skipped.
+        </p>
+        <label className="flex w-fit cursor-pointer items-center gap-2 rounded-md border border-dashed border-border px-4 py-3 text-sm dark:border-border-dark">
+          {upload.isPending ? 'Importing…' : 'Choose CSV file to import'}
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            disabled={upload.isPending}
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              try {
+                const report = await upload.mutateAsync(file);
+                push(`Imported ${report.imported}, duplicate ${report.duplicate}, ambiguous ${report.ambiguous}, skipped ${report.skipped}, failed ${report.failed}.`, 'success');
+                setExpanded(report.id);
+              } catch (err) {
+                push((err as { message?: string })?.message ?? 'Import failed', 'error');
+              }
+              e.target.value = '';
+            }}
+          />
+        </label>
+      </Card>
+
+      <Card header={<h2 className="text-base font-semibold">Import History</h2>}>
+        {isLoading ? (
+          <p className="text-sm text-content-muted">Loading…</p>
+        ) : !batches || batches.length === 0 ? (
+          <EmptyState title="No imports yet" reason="Upload a CSV above to see its validation report here." />
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {batches.map((b) => (
+              <li key={b.id} className="rounded-md border border-border p-3 text-sm dark:border-border-dark">
+                <button className="flex w-full flex-wrap items-center justify-between gap-2 text-left" onClick={() => setExpanded(expanded === b.id ? null : b.id)}>
+                  <span className="font-medium text-content dark:text-content-dark">
+                    {b.sourceSheet} · {new Date(b.importedAt).toLocaleString('en-IN')}
+                  </span>
+                  <span className="flex flex-wrap gap-1">
+                    <Badge tone="success">{b.imported} imported</Badge>
+                    <Badge tone="neutral">{b.duplicate} duplicate</Badge>
+                    <Badge tone="warning">{b.ambiguous} ambiguous</Badge>
+                    <Badge tone="neutral">{b.skipped} skipped</Badge>
+                    {b.failed > 0 && <Badge tone="danger">{b.failed} failed</Badge>}
+                  </span>
+                </button>
+                {b.warnings.length > 0 && (
+                  <ul className="mt-2 list-inside list-disc text-xs text-warning-strong dark:text-warning">
+                    {b.warnings.map((w, i) => (
+                      <li key={i}>{w}</li>
+                    ))}
+                  </ul>
+                )}
+                {expanded === b.id && <BatchRowDetail batchId={b.id} />}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function BatchRowDetail({ batchId }: { batchId: string }) {
+  const { data: batches } = useLegacyImportBatches();
+  const batch = batches?.find((b) => b.id === batchId);
+  // The list endpoint doesn't include row detail — fetch it directly.
+  const [rows, setRows] = useState<LegacyImportRow[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setRows(null);
+    apiClient.get<LegacyImportBatch>(`/legacy-import/${batchId}`).then((res) => {
+      if (!cancelled) setRows(res.data.rows ?? []);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [batchId]);
+  if (!batch) return null;
+  return (
+    <div className="mt-3 overflow-x-auto" tabIndex={0} role="region" aria-label="Import row detail, scroll horizontally for more columns">
+      {!rows ? (
+        <p className="text-xs text-content-muted">Loading rows…</p>
+      ) : (
+        <table className="w-full min-w-[480px] text-left text-xs">
+          <thead className="text-content-muted-strong dark:text-content-dark-muted">
+            <tr>
+              <th className="py-1 pr-3">#</th>
+              <th className="py-1 pr-3">Status</th>
+              <th className="py-1 pr-3">Reason</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border dark:divide-border-dark">
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td className="py-1 pr-3">{r.rowNumber}</td>
+                <td className="py-1 pr-3">{r.status}</td>
+                <td className="py-1 pr-3 text-content-muted dark:text-content-dark-muted">{r.reasonText ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 export function MastersPage() {
   const [tab, setTab] = useState<Tab>('Organization & Work');
   return (
@@ -637,6 +760,7 @@ export function MastersPage() {
       {tab === 'SLA Rules' && <SlaRulesTab />}
       {tab === 'Escalation Rules' && <EscalationRulesTab />}
       {tab === 'Reasons' && <ReasonsTab />}
+      {tab === 'Legacy Import' && <LegacyImportTab />}
     </div>
   );
 }
