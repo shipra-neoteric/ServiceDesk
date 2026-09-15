@@ -68,7 +68,7 @@ export function DashboardPage() {
         ) : !health.data || health.data.length === 0 ? (
           <EmptyState title="No projects yet" reason="Add a project in Masters to see health here." />
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Project health table, scroll horizontally for more columns">
             <table className="w-full min-w-[640px] text-left text-sm">
               <thead className="text-xs uppercase text-content-muted dark:text-content-dark-muted">
                 <tr>
@@ -109,7 +109,12 @@ export function DashboardPage() {
         ) : (
           <div className="flex flex-col gap-2">
             {bottlenecks.data.map((b) => (
-              <div key={b.stageKey} className="flex items-center gap-3">
+              <button
+                key={b.stageKey}
+                onClick={() => navigate(`/jobs?stageKey=${b.stageKey}`)}
+                className="flex items-center gap-3 rounded-md p-1 text-left transition-colors duration-fast hover:bg-surface-muted dark:hover:bg-surface-dark-muted"
+                title={`View jobs stuck at ${b.name}`}
+              >
                 <span className="w-40 shrink-0 text-sm text-content dark:text-content-dark">{b.name}</span>
                 <div className="h-2 flex-1 rounded-full bg-surface-muted dark:bg-surface-dark-muted">
                   <div
@@ -118,7 +123,7 @@ export function DashboardPage() {
                   />
                 </div>
                 <span className="w-8 text-right text-sm font-semibold text-content dark:text-content-dark">{b.count}</span>
-              </div>
+              </button>
             ))}
           </div>
         )}

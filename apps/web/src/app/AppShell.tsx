@@ -81,8 +81,11 @@ export function AppShell() {
                 className={({ isActive }) =>
                   clsx(
                     'flex h-[34px] items-center gap-2 rounded-md px-2.5 text-[15px] font-medium transition-colors duration-fast',
+                    // text-primary-strong (not text-primary-hover): an axe-core accessibility
+                    // smoke test measured text-primary-hover at 3.35:1 against this background,
+                    // short of WCAG AA's 4.5:1 for 15px text — see tailwind.config.ts.
                     isActive
-                      ? 'bg-primary-soft text-primary-hover dark:bg-primary/15 dark:text-primary-light'
+                      ? 'bg-primary-soft text-primary-strong dark:bg-primary/15 dark:text-primary-light'
                       : 'text-content hover:bg-surface-muted dark:text-content-dark dark:hover:bg-surface-dark-muted',
                   )
                 }
@@ -102,7 +105,9 @@ export function AppShell() {
       {/* Desktop sidebar */}
       <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-surface dark:border-border-dark dark:bg-surface-dark lg:flex">
         <div className="flex h-14 items-center gap-2 border-b border-border px-4 dark:border-border-dark">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-sm font-bold text-white">SD</div>
+          {/* bg-primary-strong, not bg-primary: white-on-#f97316 measured 2.8:1 (axe-core), short
+              of the 4.5:1 this bold 14px text needs. */}
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary-strong text-sm font-bold text-white">SD</div>
           <div>
             <p className="text-sm font-bold leading-tight text-content dark:text-content-dark">ServiceDesk</p>
             <p className="text-[11px] leading-tight text-content-muted dark:text-content-dark-muted">Service Engineering</p>

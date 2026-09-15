@@ -10,6 +10,8 @@ export interface JobListParams {
   projectId?: string;
   categoryId?: string;
   priorityId?: string;
+  stageKey?: string;
+  engineerId?: string;
   q?: string;
   page?: number;
   pageSize?: number;
@@ -65,6 +67,14 @@ export const useSiteVisitComplete = (id: string) =>
   useJobAction<{ notes: string; diagnosis?: string; materialRequired?: boolean; approvalRequired?: boolean }>(id, 'site-visit/complete');
 export const useRequestMaterial = (id: string) => useJobAction<{ item: string; quantity: number; unit: string; specification?: string }>(id, 'materials');
 export const useRequestApproval = (id: string) => useJobAction<{ type: string; approverUserId: string; amount?: number }>(id, 'approvals');
+export const useDecideApproval = (id: string) => {
+  const invalidate = useInvalidateJob(id);
+  return useMutation({
+    mutationFn: async ({ approvalId, decision, comments }: { approvalId: string; decision: string; comments?: string }) =>
+      (await apiClient.post<JobDetail>(`/jobs/${id}/approvals/${approvalId}/decide`, { decision, comments })).data,
+    onSuccess: invalidate,
+  });
+};
 export const useReadyToStart = (id: string) => useJobAction(id, 'ready-to-start');
 export const useStartJob = (id: string) => useJobAction(id, 'start');
 export const useCompleteJob = (id: string) => useJobAction<{ completionNotes: string }>(id, 'complete');

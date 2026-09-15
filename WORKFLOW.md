@@ -61,7 +61,15 @@ Seeded stage lists match §7 exactly. Master Admin CRUD for templates is modeled
 
 ## Stage tracker (`JobStage`)
 
-Created in bulk from the chosen template when the Job Card is created, all `PENDING` except the first (`ACTIVE`). Each workflow command that matches a stage's key flips that `JobStage` to `DONE`/`actualCompletedAt=now()` and activates the next one. This is what powers the clickable stage tracker in §11/§12 — the UI never infers stage state from `JobCard.status` alone, it reads `JobStage[]` directly.
+Created in bulk from the chosen template when the Job Card is created, all `PENDING` except the first (`ACTIVE`). This is what powers the clickable stage tracker in §11/§12 — the UI never infers stage state from `JobCard.status` alone, it reads `JobStage[]` directly.
+
+Only commands that represent a stage genuinely *finishing* close it (`assign`→ASSIGN, `siteVisitComplete`→SITE_VISIT, `complete`→EXECUTION, `close`→VERIFICATION — see `STAGE_KEY_FOR_COMMAND` in `apps/api/src/lib/workflowEngine.ts`). Commands that happen *inside* an already-active stage (`start`, `partial`, `siteVisitStart`, `requestMaterial`, `requestApproval`) intentionally close nothing — an earlier version of this file/code mapped `start`→EXECUTION and `siteVisitStart`→SITE_VISIT, which meant *starting* work immediately marked that stage DONE before any work happened; this was found and fixed via `test/stageBookkeeping.test.ts`.
+
+Two commands close "whichever stage is currently ACTIVE" rather than one fixed key (`DYNAMIC_STAGE_CLOSE_COMMANDS`):
+- **`readyToStart`** — reachable from a material-blocked, approval-blocked, or post-site-visit state depending on the template, so only "whatever's active right now" answers "which stage does this close."
+- **`assign`** — SIMPLE_REPAIR/EMERGENCY have a dedicated ASSIGN stage (closed via the fixed key), but MATERIAL_REQUIRED/NEW_WORK go straight from TRIAGE to SITE_VISIT with no ASSIGN stage at all; for those, `assign` falls back to closing whatever's active (TRIAGE) instead of silently no-opping and leaving it stuck ACTIVE forever.
+
+`requestMaterial`/`requestApproval` additionally *activate* (not close) the MATERIAL/APPROVAL stage via `activateStageIfPresent()` when the job's template actually has one positioned ahead of the current stage — a no-op for templates without that stage (e.g. material discovered mid-EXECUTION on a SIMPLE_REPAIR job correctly leaves EXECUTION active rather than jumping stages). This is what makes the Bottleneck View (§28) able to see jobs genuinely stuck on material/approval, not just jobs whose `JobCard.status` says so.
 
 ## Completion vs. Closure vs. Verification (§18)
 

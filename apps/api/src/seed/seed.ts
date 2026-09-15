@@ -1,9 +1,37 @@
 import 'dotenv/config';
 import { prisma } from '../lib/db.js';
 import { hashPassword } from '../lib/auth.js';
-import { PERMISSION_KEYS } from '@servicedesk/shared';
+import { PERMISSION_KEYS, HOLD_REASONS, CLOSURE_REASONS } from '@servicedesk/shared';
 import { createJobCard } from '../modules/jobs/service.js';
+import { computeStageDueDate } from '../lib/slaEngine.js';
 import type { AccessContext } from '../lib/accessContext.js';
+
+const HOLD_REASON_LABELS: Record<string, string> = {
+  WAITING_MATERIAL: 'Waiting for Material',
+  WAITING_APPROVAL: 'Waiting for Approval',
+  WAITING_REQUESTER: 'Waiting for Requester',
+  SITE_ACCESS_ISSUE: 'Site Access Issue',
+  SAFETY_RESTRICTION: 'Safety Restriction',
+  EXTERNAL_VENDOR: 'External Vendor',
+  TECHNICAL_CONSTRAINT: 'Technical Constraint',
+  MANAGEMENT_HOLD: 'Management Hold',
+  WEATHER: 'Weather',
+  DEPENDENCY_ON_OTHER_WORK: 'Dependency on Other Work',
+};
+const CLOSURE_REASON_LABELS: Record<string, string> = {
+  COMPLETED: 'Completed',
+  NOT_FEASIBLE: 'Not Feasible',
+  DUPLICATE: 'Duplicate',
+  NO_ACTION_REQUIRED: 'No Action Required',
+};
+const DEFAULT_CANCELLATION_REASONS = [
+  ['REQUESTER_WITHDREW', 'Requester Withdrew Request'],
+  ['RAISED_IN_ERROR', 'Raised in Error'],
+];
+const DEFAULT_REOPEN_REASONS = [
+  ['ISSUE_RECURRED', 'Issue Recurred'],
+  ['INCOMPLETE_FIX', 'Original Fix Was Incomplete'],
+];
 
 const ROLE_PERMISSIONS: Record<string, string[]> = {
   SERVICE_ENGINEER: ['job.create', 'job.view', 'job.edit', 'job.hold', 'job.resume', 'job.complete', 'material.create', 'material.update', 'approval.request'],
@@ -207,6 +235,38 @@ async function main() {
   await prisma.holiday.create({ data: { date: new Date(`${new Date().getFullYear()}-10-02`), name: 'Gandhi Jayanti' } });
   await prisma.holiday.create({ data: { date: new Date(`${new Date().getFullYear()}-12-25`), name: 'Christmas' } });
 
+  console.log('Seeding reason codes...');
+  for (const code of HOLD_REASONS) {
+    await prisma.reasonCode.upsert({
+      where: { category_code: { category: 'HOLD', code } },
+      create: { category: 'HOLD', code, label: HOLD_REASON_LABELS[code] ?? code },
+      update: {},
+    });
+  }
+  for (const code of CLOSURE_REASONS) {
+    await prisma.reasonCode.upsert({
+      where: { category_code: { category: 'CLOSURE', code } },
+      create: { category: 'CLOSURE', code, label: CLOSURE_REASON_LABELS[code] ?? code },
+      update: {},
+    });
+  }
+  for (const [code, label] of DEFAULT_CANCELLATION_REASONS) {
+    await prisma.reasonCode.upsert({ where: { category_code: { category: 'CANCELLATION', code } }, create: { category: 'CANCELLATION', code, label }, update: {} });
+  }
+  for (const [code, label] of DEFAULT_REOPEN_REASONS) {
+    await prisma.reasonCode.upsert({ where: { category_code: { category: 'REOPEN', code } }, create: { category: 'REOPEN', code, label }, update: {} });
+  }
+
+  console.log('Seeding escalation rules...');
+  const escalationDefaults: { triggerType: string; thresholdHours: number; escalateToRole: string }[] = [
+    { triggerType: 'APPROVAL_OVERDUE', thresholdHours: 24, escalateToRole: 'SERVICE_HEAD' },
+    { triggerType: 'MATERIAL_BLOCKED', thresholdHours: 48, escalateToRole: 'PROJECT_HEAD' },
+    { triggerType: 'NO_UPDATE', thresholdHours: 24, escalateToRole: 'PROCESS_COORDINATOR' },
+  ];
+  for (const rule of escalationDefaults) {
+    await prisma.escalationRule.upsert({ where: { triggerType: rule.triggerType }, create: rule, update: {} });
+  }
+
   console.log('Seeding demo Job Cards...');
   const ctxFor = (userId: string): AccessContext => ({
     userId,
@@ -232,9 +292,24 @@ async function main() {
         await prisma.jobStage.update({ where: { id: s.id }, data: { status: 'DONE', actualCompletedAt: s.actualStartAt ?? new Date() } });
       }
     }
+    // Fresh due date, same as the real activateStageIfPresent()/advanceStage() would compute —
+    // keeps JobCard.currentStageKey/nextAction/nextActionDueAt in sync with JobStage, which is
+    // what the Overdue KPI, attention queue and stage tracker all actually read.
+    const job = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId } });
+    const plannedDueAt = await computeStageDueDate({
+      projectId: job.projectId,
+      categoryId: job.categoryId,
+      priorityId: job.priorityId,
+      stageKey: target.stageKey,
+      startAt: new Date(),
+    });
     await prisma.jobStage.update({
       where: { id: target.id },
-      data: { status: 'ACTIVE', actualStartAt: target.actualStartAt ?? new Date(), actualCompletedAt: null },
+      data: { status: 'ACTIVE', actualStartAt: target.actualStartAt ?? new Date(), actualCompletedAt: null, plannedDueAt },
+    });
+    await prisma.jobCard.update({
+      where: { id: jobCardId },
+      data: { currentStageKey: target.stageKey, nextAction: target.name, nextActionDueAt: plannedDueAt },
     });
   }
 

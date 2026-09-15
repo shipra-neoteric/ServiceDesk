@@ -90,13 +90,33 @@ export function selectTemplateKey(params: {
   return 'SIMPLE_REPAIR';
 }
 
+/**
+ * Only commands that represent a stage genuinely *finishing* close it — this is a fixed
+ * command -> stageKey map, not "whatever command happens to be associated with that stage".
+ * Getting this wrong is a real class of bug: mapping `start` to `EXECUTION` (as an earlier
+ * version of this file did) makes *starting* work immediately mark that stage DONE and jump
+ * the tracker to Verification before any work happens, and mapping `siteVisitStart` to
+ * `SITE_VISIT` does the same to the site-visit stage. `siteVisitStart`/`start`/`partial` and
+ * the material/approval *request* commands intentionally have no entry here — they change
+ * `JobCard.status` but happen *inside* a stage that is already ACTIVE, not at its boundary.
+ */
 export const STAGE_KEY_FOR_COMMAND: Partial<Record<WorkflowCommand, string>> = {
   assign: 'ASSIGN',
-  siteVisitStart: 'SITE_VISIT',
   siteVisitComplete: 'SITE_VISIT',
-  requestMaterial: 'MATERIAL',
-  requestApproval: 'APPROVAL',
-  start: 'EXECUTION',
   complete: 'EXECUTION',
   close: 'VERIFICATION',
 };
+
+/**
+ * Commands that close whichever stage is *currently* ACTIVE, rather than only a fixed key.
+ * `readyToStart` is reachable from a material-blocked, approval-blocked, or post-site-visit
+ * state depending on the template, so "which stage does this close" can only be answered by
+ * looking at `JobCard.currentStageKey` at call time. `assign` is here too as a *fallback*:
+ * SIMPLE_REPAIR/EMERGENCY have a dedicated ASSIGN stage (closed via the fixed key above), but
+ * MATERIAL_REQUIRED/NEW_WORK go straight from TRIAGE to SITE_VISIT with no ASSIGN stage at
+ * all — for those, assign must still close whatever's active (TRIAGE) or it silently no-ops
+ * and leaves TRIAGE stuck ACTIVE forever. See resolveStageKeyToClose in jobs/service.ts, which
+ * tries the fixed key first and only falls back to "current active" when that stage doesn't
+ * exist in this job's template.
+ */
+export const DYNAMIC_STAGE_CLOSE_COMMANDS: ReadonlySet<WorkflowCommand> = new Set(['readyToStart', 'assign']);

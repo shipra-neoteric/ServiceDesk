@@ -61,6 +61,48 @@ attachmentsRouter.post(
   }),
 );
 
+const EXT_CONTENT_TYPE: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.mp4': 'video/mp4',
+  '.pdf': 'application/pdf',
+};
+
+/**
+ * Attachment file access (§security review, priority 2 of the rollout-hardening pass).
+ *
+ * Files used to be served by an unauthenticated `express.static('/uploads')` mount — anyone
+ * with (or guessing) a URL could read another project's evidence photos. This route replaces
+ * that: it requires a session AND re-derives authorization from the *job*, not the file —
+ * the caller must have access to the project that owns `:jobId`, and the attachment must
+ * actually belong to that job (not just exist somewhere in the uploads folder), so copying an
+ * attachment URL and swapping in a different jobId a user *does* have access to still 404s
+ * unless that attachment really is on that job.
+ */
+attachmentsRouter.get(
+  '/:jobId/attachments/:attachmentId/file',
+  asyncHandler(async (req, res) => {
+    const job = await prisma.jobCard.findUnique({ where: { id: req.params.jobId } });
+    if (!job) throw notFound('Job Card not found');
+    if (!canViewProject(req.access!, job.projectId)) throw notFound('Job Card not found');
+
+    const attachment = await prisma.attachment.findFirst({ where: { id: req.params.attachmentId, jobCardId: job.id } });
+    if (!attachment) throw notFound('Attachment not found');
+
+    const fileName = path.basename(attachment.path); // defense in depth: strip any path segments
+    const absolutePath = path.join(UPLOAD_DIR, fileName);
+    if (!absolutePath.startsWith(UPLOAD_DIR) || !fs.existsSync(absolutePath)) throw notFound('Attachment file not found');
+
+    const contentType = EXT_CONTENT_TYPE[path.extname(fileName).toLowerCase()] ?? 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${attachment.fileName.replace(/"/g, '')}"`);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.sendFile(absolutePath);
+  }),
+);
+
 // Multer errors (oversized/unsupported) surface as generic Error, not HttpError — normalize.
 attachmentsRouter.use((err: unknown, _req: import('express').Request, res: import('express').Response, next: import('express').NextFunction) => {
   if (err instanceof multer.MulterError || (err instanceof Error && err.message === 'Unsupported file type')) {

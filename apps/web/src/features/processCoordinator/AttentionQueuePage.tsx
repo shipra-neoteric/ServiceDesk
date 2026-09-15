@@ -77,7 +77,7 @@ export function AttentionQueuePage() {
                         <span className="font-medium">Current owner:</span> {item.currentOwner ?? 'Unassigned'}
                         {item.hoursLate !== null && item.hoursLate > 0 && ` · ${item.hoursLate.toFixed(1)}h late`}
                       </p>
-                      <p className="mt-1 text-sm font-medium text-primary">{item.recommendedAction}</p>
+                      <p className="mt-1 text-sm font-medium text-primary-strong dark:text-primary">{item.recommendedAction}</p>
                     </div>
                   </div>
                   <Button size="sm" variant="secondary" onClick={() => navigate(`/jobs/${item.jobCardId}`)}>

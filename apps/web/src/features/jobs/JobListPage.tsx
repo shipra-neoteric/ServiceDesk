@@ -33,9 +33,14 @@ export function JobListPage() {
   const view = params.get('view') ?? undefined;
   const q = params.get('q') ?? '';
   const projectId = params.get('projectId') ?? undefined;
+  const stageKey = params.get('stageKey') ?? undefined;
+  const engineerId = params.get('engineerId') ?? undefined;
   const page = Number(params.get('page') ?? '1');
 
-  const queryParams = useMemo(() => ({ view, q: q || undefined, projectId, page, pageSize: 25 }), [view, q, projectId, page]);
+  const queryParams = useMemo(
+    () => ({ view, q: q || undefined, projectId, stageKey, engineerId, page, pageSize: 25 }),
+    [view, q, projectId, stageKey, engineerId, page],
+  );
   const { data, isLoading } = useJobList(queryParams);
 
   const setParam = (key: string, value: string | undefined) => {
@@ -46,7 +51,7 @@ export function JobListPage() {
     setParams(next);
   };
 
-  const activeFilterCount = [view, projectId].filter(Boolean).length;
+  const activeFilterCount = [view, projectId, stageKey, engineerId].filter(Boolean).length;
 
   const columns: Column<JobListItem>[] = [
     { key: 'jobNumber', header: 'Job Card', render: (r) => <span className="font-medium text-content dark:text-content-dark">{r.jobNumber}</span> },
@@ -62,7 +67,9 @@ export function JobListPage() {
       header: 'Due',
       render: (r) =>
         r.nextActionDueAt ? (
-          <span className={new Date(r.nextActionDueAt) < new Date() && r.isOpen ? 'font-medium text-danger' : ''}>{formatDateTime(r.nextActionDueAt)}</span>
+          <span className={new Date(r.nextActionDueAt) < new Date() && r.isOpen ? 'font-medium text-danger-strong dark:text-danger' : ''}>
+            {formatDateTime(r.nextActionDueAt)}
+          </span>
         ) : (
           '—'
         ),
@@ -85,6 +92,7 @@ export function JobListPage() {
 
       <Toolbar search={q} onSearchChange={(v) => setParam('q', v || undefined)} searchPlaceholder="Search job number or location…" activeFilterCount={activeFilterCount} onClearFilters={() => setParams({})}>
         <select
+          aria-label="Quick view"
           value={view ?? ''}
           onChange={(e) => setParam('view', e.target.value || undefined)}
           className="h-10 rounded-md border border-border bg-surface px-2 text-sm dark:border-border-dark dark:bg-surface-dark"

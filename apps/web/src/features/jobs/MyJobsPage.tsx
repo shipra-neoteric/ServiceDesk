@@ -15,7 +15,7 @@ function JobRow({ job, onClick }: { job: JobListItem; onClick: () => void }) {
         <StatusBadge status={job.status} />
       </div>
       <span className="text-content-muted dark:text-content-dark-muted">{job.locationText}</span>
-      <span className="font-medium text-primary">{job.nextAction ?? 'No next action set'}</span>
+      <span className="font-medium text-primary-strong dark:text-primary">{job.nextAction ?? 'No next action set'}</span>
       {job.nextActionDueAt && <span className="text-xs text-content-muted dark:text-content-dark-muted">Due {formatDateTime(job.nextActionDueAt)}</span>}
     </button>
   );

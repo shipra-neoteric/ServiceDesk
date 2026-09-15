@@ -128,8 +128,11 @@ usersRouter.post(
 );
 
 // Directory of engineers usable for assignment pickers, with active-job workload (§27, §44 assignment overload).
+// Gated the same as the mutation it feeds (job.assign/job.reassign) — a Requester or other
+// non-assigning role has no legitimate use for the engineer roster/workload.
 usersRouter.get(
   '/engineers/workload',
+  requirePermission('job.assign', 'job.reassign'),
   asyncHandler(async (req, res) => {
     const ctx = req.access!;
     const engineers = await prisma.user.findMany({
@@ -154,5 +157,22 @@ usersRouter.get(
       }),
     );
     res.json(workload);
+  }),
+);
+
+// Directory of valid approvers (users holding a role with approval.decide) usable for the
+// Approvals tab's request form. Gated by approval.request, not user.view — someone raising an
+// approval needs to see who can decide it without being handed the full user directory
+// (user.view is restricted to Service Head/Master Admin — see PERMISSIONS.md).
+usersRouter.get(
+  '/approvers',
+  requirePermission('approval.request'),
+  asyncHandler(async (_req, res) => {
+    const approvers = await prisma.user.findMany({
+      where: { active: true, roles: { some: { role: { permissions: { some: { permission: { key: 'approval.decide' } } } } } } },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+    res.json(approvers);
   }),
 );

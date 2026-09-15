@@ -119,8 +119,24 @@ describe('Job Card lifecycle and project scoping', () => {
     expect(res.status).toBe(409);
   });
 
+  it('assigns and starts the job through the real transitions (also closes TRIAGE/ASSIGN along the way)', async () => {
+    const assign = await request(app)
+      .post(`/jobs/${jobId}/assign`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ userId: (await prisma.user.findFirstOrThrow()).id, role: 'ENGINEER' });
+    expect(assign.status).toBe(200);
+    expect(assign.body.status).toBe('ASSIGNED');
+
+    const start = await request(app).post(`/jobs/${jobId}/start`).set('Authorization', `Bearer ${adminToken}`).send({});
+    expect(start.status).toBe(200);
+    expect(start.body.status).toBe('IN_PROGRESS');
+    // §17's evidence check depends on the EXECUTION stage template — "start" must not have
+    // already closed it (see workflowEngine.ts DYNAMIC_STAGE_CLOSE_COMMANDS doc comment).
+    const executionStage = start.body.stages.find((s: { stageKey: string }) => s.stageKey === 'EXECUTION');
+    expect(executionStage.status).toBe('ACTIVE');
+  });
+
   it('blocks completion without an AFTER evidence attachment (§17)', async () => {
-    await prisma.jobCard.update({ where: { id: jobId }, data: { status: 'IN_PROGRESS' } });
     const res = await request(app)
       .post(`/jobs/${jobId}/complete`)
       .set('Authorization', `Bearer ${adminToken}`)

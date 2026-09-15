@@ -43,9 +43,17 @@ export function DataTable<T extends { id: string }>({
   const totalPages = pagination ? Math.max(1, Math.ceil(pagination.total / pagination.pageSize)) : 1;
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-border dark:border-border-dark">
+    // tabIndex + role/aria-label: a horizontally-scrollable region must itself be keyboard-
+    // focusable (arrow-key scrollable) per WCAG 2.1.1/2.1.3 — an axe-core smoke test on the
+    // mobile viewport caught this container being scrollable by touch/mouse only.
+    <div
+      className="overflow-x-auto rounded-lg border border-border dark:border-border-dark"
+      tabIndex={0}
+      role="region"
+      aria-label="Job Card table, scroll horizontally for more columns"
+    >
       <table className="w-full min-w-[720px] text-left text-sm">
-        <thead className="sticky top-0 bg-surface-muted text-xs font-semibold uppercase tracking-wide text-content-muted dark:bg-surface-dark-muted dark:text-content-dark-muted">
+        <thead className="sticky top-0 bg-surface-muted text-xs font-semibold uppercase tracking-wide text-content-muted-strong dark:bg-surface-dark-muted dark:text-content-dark-muted">
           <tr>
             {columns.map((c) => (
               <th key={c.key} className="px-4 py-3">

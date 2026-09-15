@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { CheckCircle2, Circle, Clock, Download, PauseCircle, PlayCircle, XCircle } from 'lucide-react';
+import { CheckCircle2, Circle, Clock, Download, PauseCircle, PlayCircle, UserPlus, XCircle } from 'lucide-react';
 import clsx from 'clsx';
 import { Card } from '../../ui/Card';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -11,9 +11,12 @@ import { formatDateTime } from '../../lib/format';
 import { apiClient } from '../../lib/apiClient';
 import {
   useJobDetail,
+  useAssignJob,
   useSiteVisitStart,
   useSiteVisitComplete,
   useRequestMaterial,
+  useRequestApproval,
+  useDecideApproval,
   useReadyToStart,
   useStartJob,
   useCompleteJob,
@@ -26,6 +29,10 @@ import {
   useUploadAttachment,
 } from './api';
 import { EmptyState } from '../../ui/EmptyState';
+import { AttachmentThumb } from './AttachmentThumb';
+import { HoldJobModal } from './HoldJobModal';
+import { AssignEngineerModal } from './AssignEngineerModal';
+import { useApprovers } from '../masters/api';
 
 const TABS = ['Overview', 'Workflow', 'Materials', 'Approvals', 'Evidence', 'Communication', 'History'] as const;
 type Tab = (typeof TABS)[number];
@@ -39,9 +46,12 @@ export function JobDetailPage() {
   const { push } = useToast();
   const [tab, setTab] = useState<Tab>('Overview');
 
+  const assignJob = useAssignJob(id!);
   const siteVisitStart = useSiteVisitStart(id!);
   const siteVisitComplete = useSiteVisitComplete(id!);
   const requestMaterial = useRequestMaterial(id!);
+  const requestApproval = useRequestApproval(id!);
+  const decideApproval = useDecideApproval(id!);
   const readyToStart = useReadyToStart(id!);
   const startJob = useStartJob(id!);
   const completeJob = useCompleteJob(id!);
@@ -54,7 +64,11 @@ export function JobDetailPage() {
   const uploadAttachment = useUploadAttachment(id!);
 
   const [commentBody, setCommentBody] = useState('');
+  const [holdModalOpen, setHoldModalOpen] = useState(false);
+  const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [materialForm, setMaterialForm] = useState({ item: '', quantity: '1', unit: 'pcs' });
+  const [approvalForm, setApprovalForm] = useState({ type: '', approverUserId: '', amount: '' });
+  const { data: approvers } = useApprovers();
   const [visitNotes, setVisitNotes] = useState('');
 
   if (isLoading) return <p className="text-sm text-content-muted">Loading Job Card…</p>;
@@ -95,7 +109,7 @@ export function JobDetailPage() {
               {job.subcategory ? ` / ${job.subcategory.name}` : ''} · {job.priority.name}
             </p>
           </div>
-          <button onClick={downloadPdf} className="inline-flex items-center gap-1 text-sm text-primary hover:underline">
+          <button onClick={downloadPdf} className="inline-flex items-center gap-1 text-sm text-primary-strong dark:text-primary hover:underline">
             <Download className="h-4 w-4" /> Job Card PDF
           </button>
         </div>
@@ -132,6 +146,13 @@ export function JobDetailPage() {
       {/* Action panel */}
       <Card header={<h2 className="text-base font-semibold text-content dark:text-content-dark">Actions</h2>}>
         <div className="flex flex-wrap gap-2">
+          {!['CLOSED', 'CLOSED_NOT_FEASIBLE', 'CLOSED_DUPLICATE', 'CLOSED_NO_ACTION', 'CANCELLED'].includes(job.status) && (
+            <PermissionGate permissions={['job.assign', 'job.reassign']}>
+              <Button size="sm" variant="secondary" onClick={() => setAssignModalOpen(true)}>
+                <UserPlus className="h-4 w-4" /> {job.assignments.some((a) => a.role === 'ENGINEER') ? 'Reassign Engineer' : 'Assign Engineer'}
+              </Button>
+            </PermissionGate>
+          )}
           {job.status === 'ASSIGNED' && (
             <PermissionGate permissions={['job.edit']}>
               <Button size="sm" onClick={() => run(() => siteVisitStart.mutateAsync(undefined), 'Site visit started')}>
@@ -204,23 +225,7 @@ export function JobDetailPage() {
           ) : (
             !['CLOSED', 'CLOSED_NOT_FEASIBLE', 'CLOSED_DUPLICATE', 'CLOSED_NO_ACTION', 'CANCELLED'].includes(job.status) && (
               <PermissionGate permissions={['job.hold']}>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() =>
-                    run(
-                      () =>
-                        holdJob.mutateAsync({
-                          reasonCode: 'TECHNICAL_CONSTRAINT',
-                          dependencyOwnerRole: 'PROJECT_HEAD',
-                          reviewDueAt: new Date(Date.now() + 48 * 3_600_000).toISOString(),
-                          comment: 'Placed on hold.',
-                          slaPauses: true,
-                        }),
-                      'Job placed on hold',
-                    )
-                  }
-                >
+                <Button size="sm" variant="secondary" onClick={() => setHoldModalOpen(true)}>
                   <PauseCircle className="h-4 w-4" /> Hold
                 </Button>
               </PermissionGate>
@@ -244,7 +249,7 @@ export function JobDetailPage() {
             onClick={() => setTab(t)}
             className={clsx(
               'shrink-0 border-b-2 px-3 py-2 text-sm font-medium transition-colors duration-fast',
-              tab === t ? 'border-primary text-primary' : 'border-transparent text-content-muted hover:text-content dark:text-content-dark-muted',
+              tab === t ? 'border-primary text-primary-strong dark:text-primary' : 'border-transparent text-content-muted hover:text-content dark:text-content-dark-muted',
             )}
           >
             {t}
@@ -340,6 +345,53 @@ export function JobDetailPage() {
 
       {tab === 'Approvals' && (
         <Card>
+          <PermissionGate permissions={['approval.request']}>
+            <div className="mb-4 flex flex-wrap items-end gap-2">
+              <input
+                value={approvalForm.type}
+                onChange={(e) => setApprovalForm((f) => ({ ...f, type: e.target.value }))}
+                placeholder="Approval type (e.g. CAPEX_ESTIMATE)"
+                className="h-9 w-56 rounded-md border border-border bg-surface px-2 text-sm dark:border-border-dark dark:bg-surface-dark"
+              />
+              <select
+                aria-label="Select approver"
+                value={approvalForm.approverUserId}
+                onChange={(e) => setApprovalForm((f) => ({ ...f, approverUserId: e.target.value }))}
+                className="h-9 rounded-md border border-border bg-surface px-2 text-sm dark:border-border-dark dark:bg-surface-dark"
+              >
+                <option value="">Select approver…</option>
+                {approvers?.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="number"
+                placeholder="Amount (optional)"
+                value={approvalForm.amount}
+                onChange={(e) => setApprovalForm((f) => ({ ...f, amount: e.target.value }))}
+                className="h-9 w-36 rounded-md border border-border bg-surface px-2 text-sm dark:border-border-dark dark:bg-surface-dark"
+              />
+              <Button
+                size="sm"
+                disabled={!approvalForm.type || !approvalForm.approverUserId}
+                onClick={() =>
+                  run(
+                    () =>
+                      requestApproval.mutateAsync({
+                        type: approvalForm.type,
+                        approverUserId: approvalForm.approverUserId,
+                        amount: approvalForm.amount ? Number(approvalForm.amount) : undefined,
+                      }),
+                    'Approval requested',
+                  ).then(() => setApprovalForm({ type: '', approverUserId: '', amount: '' }))
+                }
+              >
+                Request Approval
+              </Button>
+            </div>
+          </PermissionGate>
           {job.approvals.length === 0 ? (
             <EmptyState title="No approvals requested" reason="This job has no approval dependency." />
           ) : (
@@ -350,7 +402,24 @@ export function JobDetailPage() {
                     {a.type} — approver {a.approver.name}
                     {a.amount ? ` — ₹${a.amount.toLocaleString('en-IN')}` : ''}
                   </span>
-                  <span className="font-medium text-content dark:text-content-dark">{a.decision}</span>
+                  {a.decision === 'PENDING' ? (
+                    <PermissionGate permissions={['approval.decide']} fallback={<span className="font-medium text-warning">PENDING</span>}>
+                      <span className="flex gap-2">
+                        <Button size="sm" onClick={() => run(() => decideApproval.mutateAsync({ approvalId: a.id, decision: 'APPROVED' }), 'Approved')}>
+                          Approve
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={() => run(() => decideApproval.mutateAsync({ approvalId: a.id, decision: 'REJECTED' }), 'Rejected')}
+                        >
+                          Reject
+                        </Button>
+                      </span>
+                    </PermissionGate>
+                  ) : (
+                    <span className="font-medium text-content dark:text-content-dark">{a.decision}</span>
+                  )}
                 </li>
               ))}
             </ul>
@@ -380,14 +449,10 @@ export function JobDetailPage() {
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               {job.attachments.map((a) => (
-                <a key={a.id} href={`${import.meta.env.VITE_API_BASE_URL}${a.path}`} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-md border border-border dark:border-border-dark">
-                  {a.type === 'PHOTO' ? (
-                    <img src={`${import.meta.env.VITE_API_BASE_URL}${a.path}`} alt={a.caption ?? a.phase ?? 'attachment'} className="h-24 w-full object-cover" />
-                  ) : (
-                    <div className="flex h-24 items-center justify-center text-xs">{a.type}</div>
-                  )}
+                <div key={a.id}>
+                  <AttachmentThumb jobId={job.id} attachmentId={a.id} type={a.type} caption={a.caption ?? a.phase ?? 'attachment'} />
                   <p className="p-1 text-[11px] text-content-muted dark:text-content-dark-muted">{a.phase ?? ''}</p>
-                </a>
+                </div>
               ))}
             </div>
           )}
@@ -440,6 +505,23 @@ export function JobDetailPage() {
           </ul>
         </Card>
       )}
+
+      <HoldJobModal
+        open={holdModalOpen}
+        submitting={holdJob.isPending}
+        onClose={() => setHoldModalOpen(false)}
+        onSubmit={(input) =>
+          run(() => holdJob.mutateAsync(input), 'Job placed on hold').then(() => setHoldModalOpen(false))
+        }
+      />
+      <AssignEngineerModal
+        open={assignModalOpen}
+        assigning={assignJob.isPending}
+        onClose={() => setAssignModalOpen(false)}
+        onAssign={(userId) =>
+          run(() => assignJob.mutateAsync({ userId, role: 'ENGINEER' }), 'Engineer assigned').then(() => setAssignModalOpen(false))
+        }
+      />
     </div>
   );
 }

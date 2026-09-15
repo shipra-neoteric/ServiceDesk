@@ -13,6 +13,7 @@ import {
   CloseJobSchema,
   ReopenJobSchema,
   AddCommentSchema,
+  ChangeDueDateSchema,
   isOpenStatus,
   type JobStatus,
 } from '@servicedesk/shared';
@@ -73,6 +74,7 @@ const ListQuerySchema = z.object({
   categoryId: z.string().optional(),
   priorityId: z.string().optional(),
   engineerId: z.string().optional(),
+  stageKey: z.string().optional(),
   view: z.enum(['all_open', 'my_jobs', 'due_today', 'overdue', 'waiting_material', 'waiting_approval', 'in_progress', 'verification', 'closed', 'reopened']).optional(),
   q: z.string().optional(),
   page: z.coerce.number().int().min(1).default(1),
@@ -101,6 +103,10 @@ jobsRouter.get(
     }
     if (q.engineerId) {
       where.assignments = { some: { userId: q.engineerId, active: true } };
+    }
+    if (q.stageKey) {
+      // Bottleneck View drill-down (§28): jobs currently stuck on this stage.
+      where.stages = { some: { stageKey: q.stageKey, status: { in: ['ACTIVE', 'BLOCKED'] } } };
     }
 
     const now = new Date();
@@ -289,7 +295,7 @@ jobsRouter.post(
       },
     });
     if (isOpenStatus(job.status as JobStatus) && job.status !== 'WAITING_MATERIAL') {
-      await runSimpleCommand({ jobCardId: job.id, command: 'requestMaterial', actorId: req.access!.userId }).catch(() => undefined);
+      await runSimpleCommand({ jobCardId: job.id, command: 'requestMaterial', actorId: req.access!.userId, activateStageKey: 'MATERIAL' }).catch(() => undefined);
     }
     res.status(201).json(await loadScopedJob(req.access!, job.id));
   }),
@@ -323,7 +329,7 @@ jobsRouter.post(
       data: { jobCardId: job.id, ...parsed.data, requestedById: req.access!.userId },
     });
     if (job.status !== 'WAITING_APPROVAL') {
-      await runSimpleCommand({ jobCardId: job.id, command: 'requestApproval', actorId: req.access!.userId }).catch(() => undefined);
+      await runSimpleCommand({ jobCardId: job.id, command: 'requestApproval', actorId: req.access!.userId, activateStageKey: 'APPROVAL' }).catch(() => undefined);
     }
     res.status(201).json(await loadScopedJob(req.access!, job.id));
   }),
@@ -370,13 +376,19 @@ jobsRouter.post(
     const parsed = CompleteJobSchema.safeParse(req.body);
     if (!parsed.success) throw badRequest('Invalid completion payload', parsed.error.flatten());
 
+    // §17 "Do not allow completion without required evidence" — driven by the EXECUTION-stage
+    // template's requiredEvidence flag (Masters > Workflow Templates > Evidence Requirements),
+    // not a global constant. Fail safe (require evidence) if no matching template stage is
+    // found at all, since that's an unexpected/misconfigured state, not an explicit opt-out.
     const currentStage = job.stages.find((s) => s.stageKey === job.currentStageKey);
-    const requiresEvidence = true; // §17 "Do not allow completion without required evidence"
+    const stageTemplate = currentStage
+      ? await prisma.workflowStageTemplate.findFirst({ where: { workflowTemplateId: job.workflowTemplateId, key: currentStage.stageKey } })
+      : null;
+    const requiresEvidence = stageTemplate?.requiredEvidence ?? true;
     if (requiresEvidence) {
       const hasAfterPhoto = job.attachments.some((a) => a.phase === 'AFTER');
       if (!hasAfterPhoto) throw badRequest('Completion requires at least one AFTER photo/evidence attachment');
     }
-    void currentStage;
 
     await prisma.comment.create({
       data: { jobCardId: job.id, authorId: req.access!.userId, isSystem: true, body: `Work completed: ${parsed.data.completionNotes}` },
@@ -464,8 +476,9 @@ jobsRouter.post(
       // Re-activate the EXECUTION stage (and reset VERIFICATION so it must be redone).
       const executionStage = await tx.jobStage.findFirst({ where: { jobCardId: job.id, stageKey: 'EXECUTION' } });
       const verificationStage = await tx.jobStage.findFirst({ where: { jobCardId: job.id, stageKey: 'VERIFICATION' } });
+      let plannedDueAt: Date | null = null;
       if (executionStage) {
-        const plannedDueAt = await computeStageDueDate({
+        plannedDueAt = await computeStageDueDate({
           projectId: job.projectId,
           categoryId: job.categoryId,
           priorityId: job.priorityId,
@@ -489,6 +502,7 @@ jobsRouter.post(
           closedAt: null,
           currentStageKey: executionStage ? 'EXECUTION' : job.currentStageKey,
           nextAction: executionStage ? executionStage.name : 'Re-investigate and resolve',
+          nextActionDueAt: plannedDueAt,
           currentOwnerRole: 'SERVICE_ENGINEER',
         },
       });
@@ -556,6 +570,37 @@ jobsRouter.post(
       if (openPause) await tx.sLAPause.update({ where: { id: openPause.id }, data: { endAt: new Date() } });
       await tx.jobCard.update({ where: { id: job.id }, data: { status: job.statusBeforeHold ?? 'RAISED' } });
       await writeAudit(tx, { entityType: 'JobCard', entityId: job.id, action: 'RESUME', actorId: req.access!.userId });
+    });
+    res.json(await loadScopedJob(req.access!, job.id));
+  }),
+);
+
+// ---- Change target completion date (§44 "Due date extension", §75 "preserve old due date + reason") ----
+jobsRouter.post(
+  '/:id/change-due-date',
+  requirePermission('job.change_priority'),
+  asyncHandler(async (req, res) => {
+    const job = await loadScopedJob(req.access!, req.params.id);
+    const parsed = ChangeDueDateSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest('Invalid due-date change payload', parsed.error.flatten());
+
+    await prisma.$transaction(async (tx) => {
+      await writeAudit(tx, {
+        entityType: 'JobCard',
+        entityId: job.id,
+        action: 'TARGET_DATE_CHANGED',
+        actorId: req.access!.userId,
+        oldValue: { targetCompletionAt: job.targetCompletionAt },
+        newValue: { targetCompletionAt: parsed.data.newTargetCompletionAt },
+        reason: parsed.data.reason,
+      });
+      await tx.jobCard.update({
+        where: { id: job.id },
+        data: { targetCompletionAt: new Date(parsed.data.newTargetCompletionAt), dueDateChangeCount: { increment: 1 } },
+      });
+      await tx.comment.create({
+        data: { jobCardId: job.id, authorId: req.access!.userId, isSystem: true, body: `Target completion date changed to ${parsed.data.newTargetCompletionAt}. Reason: ${parsed.data.reason}` },
+      });
     });
     res.json(await loadScopedJob(req.access!, job.id));
   }),

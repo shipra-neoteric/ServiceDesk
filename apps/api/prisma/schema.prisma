@@ -32,7 +32,7 @@ model User {
   roles           UserRole[]
   projectAccess   UserProjectAccess[]
   jobAssignments  JobAssignment[]
-  createdJobs     JobCard[]            @relation("JobCreatedBy")
+  createdJobs     JobCard[]             @relation("JobCreatedBy")
   auditEvents     AuditEvent[]
   comments        Comment[]
   attachments     Attachment[]
@@ -46,8 +46,8 @@ model User {
 }
 
 model Role {
-  id          String @id @default(cuid())
-  key         String @unique
+  id          String  @id @default(cuid())
+  key         String  @unique
   name        String
   description String?
 
@@ -56,8 +56,8 @@ model Role {
 }
 
 model Permission {
-  id          String @id @default(cuid())
-  key         String @unique
+  id          String  @id @default(cuid())
+  key         String  @unique
   description String?
 
   roles RolePermission[]
@@ -114,13 +114,13 @@ model Project {
 }
 
 model Location {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   projectId String
   parentId  String?
   type      String // BUILDING | FLOOR | ZONE | UNIT
   name      String
   code      String?
-  active    Boolean  @default(true)
+  active    Boolean @default(true)
 
   project  Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
   parent   Location?  @relation("LocationHierarchy", fields: [parentId], references: [id])
@@ -165,11 +165,11 @@ model JobType {
 }
 
 model Priority {
-  id      String  @id @default(cuid())
-  code    String  @unique // LOW | NORMAL | HIGH | CRITICAL
-  name    String
-  rank    Int
-  active  Boolean @default(true)
+  id     String  @id @default(cuid())
+  code   String  @unique // LOW | NORMAL | HIGH | CRITICAL
+  name   String
+  rank   Int
+  active Boolean @default(true)
 
   serviceRequests ServiceRequest[]
   jobCards        JobCard[]
@@ -246,65 +246,66 @@ model WorkflowStageTemplate {
 }
 
 model JobCard {
-  id                       String    @id @default(cuid())
-  jobNumber                String    @unique
-  serviceRequestId         String    @unique
-  projectId                String
-  locationId               String?
-  locationText             String
-  categoryId               String
-  subcategoryId            String?
-  jobTypeId                String
-  priorityId               String
-  workflowTemplateId       String
-  status                   String    @default("RAISED")
-  currentStageKey          String?
-  currentOwnerUserId       String?
-  currentOwnerRole         String?
-  nextAction               String?
-  nextActionDueAt          DateTime?
-  targetCompletionAt       DateTime?
+  id                         String    @id @default(cuid())
+  jobNumber                  String    @unique
+  serviceRequestId           String    @unique
+  projectId                  String
+  locationId                 String?
+  locationText               String
+  categoryId                 String
+  subcategoryId              String?
+  jobTypeId                  String
+  priorityId                 String
+  workflowTemplateId         String
+  status                     String    @default("RAISED")
+  currentStageKey            String?
+  currentOwnerUserId         String?
+  currentOwnerRole           String?
+  nextAction                 String?
+  nextActionDueAt            DateTime?
+  targetCompletionAt         DateTime?
   originalTargetCompletionAt DateTime?
-  createdById              String
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
-  closedAt                 DateTime?
-  isEmergency              Boolean   @default(false)
-  safetyIssue              Boolean   @default(false)
-  repeatComplaint          Boolean   @default(false)
-  assetTag                 String?
-  unitNumber               String?
-  reopenCount              Int       @default(0)
-  statusBeforeHold         String?
-  source                   String    @default("SERVICEDESK") // SERVICEDESK | LEGACY_FMS
-  legacyRef                String?
-  legacyPlannedDate        DateTime?
-  legacyActualDate         DateTime?
-  legacyStatusText         String?
-  legacyDelayText          String?
+  createdById                String
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+  closedAt                   DateTime?
+  isEmergency                Boolean   @default(false)
+  safetyIssue                Boolean   @default(false)
+  repeatComplaint            Boolean   @default(false)
+  assetTag                   String?
+  unitNumber                 String?
+  reopenCount                Int       @default(0)
+  dueDateChangeCount         Int       @default(0)
+  statusBeforeHold           String?
+  source                     String    @default("SERVICEDESK") // SERVICEDESK | LEGACY_FMS
+  legacyRef                  String?
+  legacyPlannedDate          DateTime?
+  legacyActualDate           DateTime?
+  legacyStatusText           String?
+  legacyDelayText            String?
 
-  serviceRequest   ServiceRequest    @relation(fields: [serviceRequestId], references: [id])
-  project          Project           @relation(fields: [projectId], references: [id])
-  location         Location?         @relation(fields: [locationId], references: [id])
-  category         WorkCategory      @relation(fields: [categoryId], references: [id])
-  subcategory      WorkSubcategory?  @relation(fields: [subcategoryId], references: [id])
-  jobType          JobType           @relation(fields: [jobTypeId], references: [id])
-  priority         Priority          @relation(fields: [priorityId], references: [id])
-  workflowTemplate WorkflowTemplate  @relation(fields: [workflowTemplateId], references: [id])
-  createdBy        User              @relation("JobCreatedBy", fields: [createdById], references: [id])
+  serviceRequest   ServiceRequest   @relation(fields: [serviceRequestId], references: [id])
+  project          Project          @relation(fields: [projectId], references: [id])
+  location         Location?        @relation(fields: [locationId], references: [id])
+  category         WorkCategory     @relation(fields: [categoryId], references: [id])
+  subcategory      WorkSubcategory? @relation(fields: [subcategoryId], references: [id])
+  jobType          JobType          @relation(fields: [jobTypeId], references: [id])
+  priority         Priority         @relation(fields: [priorityId], references: [id])
+  workflowTemplate WorkflowTemplate @relation(fields: [workflowTemplateId], references: [id])
+  createdBy        User             @relation("JobCreatedBy", fields: [createdById], references: [id])
 
-  assignments  JobAssignment[]
-  stages       JobStage[]
-  siteVisits   SiteVisit[]
-  materials    MaterialRequirement[]
-  approvals    Approval[]
-  vendorDeps   VendorDependency[]
-  holds        Hold[]
-  attachments  Attachment[]
-  comments     Comment[]
+  assignments   JobAssignment[]
+  stages        JobStage[]
+  siteVisits    SiteVisit[]
+  materials     MaterialRequirement[]
+  approvals     Approval[]
+  vendorDeps    VendorDependency[]
+  holds         Hold[]
+  attachments   Attachment[]
+  comments      Comment[]
   verifications Verification[]
-  reopenEvents ReopenEvent[]
-  slaPauses    SLAPause[]
+  reopenEvents  ReopenEvent[]
+  slaPauses     SLAPause[]
 }
 
 model JobAssignment {
@@ -413,17 +414,17 @@ model VendorDependency {
 }
 
 model Hold {
-  id                 String    @id @default(cuid())
-  jobCardId          String
-  reasonCode         String
-  heldByUserId       String
+  id                  String    @id @default(cuid())
+  jobCardId           String
+  reasonCode          String
+  heldByUserId        String
   dependencyOwnerRole String
-  startAt            DateTime  @default(now())
-  endAt              DateTime?
-  reviewDueAt        DateTime
-  slaPauses          Boolean   @default(true)
-  comment            String
-  statusBeforeHold   String
+  startAt             DateTime  @default(now())
+  endAt               DateTime?
+  reviewDueAt         DateTime
+  slaPauses           Boolean   @default(true)
+  comment             String
+  statusBeforeHold    String
 
   jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
 }
@@ -431,16 +432,16 @@ model Hold {
 // ---------- Evidence & communication ----------
 
 model Attachment {
-  id         String   @id @default(cuid())
-  jobCardId  String
-  stageKey   String?
-  type       String // PHOTO | VIDEO | DOC
-  phase      String? // BEFORE | DURING | AFTER
-  fileName   String
-  path       String
-  caption    String?
+  id           String   @id @default(cuid())
+  jobCardId    String
+  stageKey     String?
+  type         String // PHOTO | VIDEO | DOC
+  phase        String? // BEFORE | DURING | AFTER
+  fileName     String
+  path         String
+  caption      String?
   uploadedById String
-  uploadedAt DateTime @default(now())
+  uploadedAt   DateTime @default(now())
 
   jobCard    JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
   uploadedBy User    @relation(fields: [uploadedById], references: [id])
@@ -473,13 +474,13 @@ model Verification {
 }
 
 model ReopenEvent {
-  id               String   @id @default(cuid())
+  id               String    @id @default(cuid())
   jobCardId        String
   reason           String
   reopenedById     String
-  reopenedAt       DateTime @default(now())
+  reopenedAt       DateTime  @default(now())
   previousClosedAt DateTime?
-  severity         String   @default("MEDIUM")
+  severity         String    @default("MEDIUM")
 
   jobCard    JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
   reopenedBy User    @relation(fields: [reopenedById], references: [id])
@@ -547,6 +548,34 @@ model Counter {
   value Int    @default(0)
 }
 
+// ---------- Reasons & escalation masters (§35 "Reasons", §22 escalation) ----------
+// Additive masters layered on top of the existing hold/close flows. HOLD and CLOSURE codes
+// are display/reference data seeded from the same shared Zod enums the API still validates
+// against (packages/shared/src/statuses.ts) — adding a row here does not by itself change
+// what the hold/close endpoints accept. CANCELLATION and REOPEN reasons are always free text
+// on the API (no enum exists for them), so those categories are pure curated suggestion lists.
+model ReasonCode {
+  id        String   @id @default(cuid())
+  category  String // HOLD | CLOSURE | CANCELLATION | REOPEN
+  code      String
+  label     String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@unique([category, code])
+}
+
+// Configurable thresholds for Process Coordinator attention rules (§22/§23), so "approval
+// pending > 24h" etc. are Master Admin settings, not hardcoded numbers. attention/rules.ts
+// falls back to its documented default when no active rule exists for a triggerType.
+model EscalationRule {
+  id             String  @id @default(cuid())
+  triggerType    String  @unique // e.g. APPROVAL_OVERDUE, MATERIAL_BLOCKED, HOLD_REVIEW, NO_UPDATE
+  thresholdHours Int
+  escalateToRole String
+  active         Boolean @default(true)
+}
+
 // ---------- Legacy migration ----------
 
 model LegacyImportBatch {
@@ -555,18 +584,27 @@ model LegacyImportBatch {
   importedAt  DateTime @default(now())
   imported    Int      @default(0)
   skipped     Int      @default(0)
+  ambiguous   Int      @default(0)
+  duplicate   Int      @default(0)
+  failed      Int      @default(0)
+  warnings    String? // JSON-encoded string[]
   errors      String? // JSON-encoded [{row, reason}]
 
   rows LegacyImportRow[]
 }
 
 model LegacyImportRow {
-  id         String  @id @default(cuid())
-  batchId    String
-  rowNumber  Int
-  rawJson    String
-  status     String  @default("PENDING") // PENDING | IMPORTED | ERROR
-  errorText  String?
+  id               String   @id @default(cuid())
+  batchId          String
+  rowNumber        Int
+  rawJson          String
+  status           String   @default("PENDING") // PENDING | IMPORTED | SKIPPED | AMBIGUOUS | DUPLICATE | FAILED
+  legacyRef        String? // dedupe key for idempotent re-import
+  matchedJobCardId String? // set when IMPORTED or DUPLICATE (points at the existing/created JobCard)
+  reasonText       String? // why SKIPPED/AMBIGUOUS/DUPLICATE/FAILED
+  createdAt        DateTime @default(now())
 
   batch LegacyImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([batchId, legacyRef])
 }

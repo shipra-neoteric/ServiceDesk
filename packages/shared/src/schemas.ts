@@ -94,6 +94,11 @@ export const AddCommentSchema = z.object({
   body: z.string().min(1),
 });
 
+export const ChangeDueDateSchema = z.object({
+  newTargetCompletionAt: z.string().datetime(),
+  reason: z.string().min(1),
+});
+
 export const LoginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),

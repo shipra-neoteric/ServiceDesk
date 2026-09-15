@@ -9,3 +9,6 @@ apps/api/prisma/dev.db
 apps/api/uploads/
 coverage/
 .DS_Store
+apps/web/test-results/
+apps/web/playwright-report/
+apps/web/e2e/.cache/

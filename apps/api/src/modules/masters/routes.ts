@@ -5,6 +5,7 @@ import { requireAuth } from '../../middleware/requireAuth.js';
 import { requirePermission } from '../../middleware/requirePermission.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import { badRequest } from '../../lib/httpError.js';
+import { HOLD_REASONS, CLOSURE_REASONS } from '@servicedesk/shared';
 
 export const mastersRouter = Router();
 mastersRouter.use(requireAuth);
@@ -193,11 +194,28 @@ mastersRouter.post(
   }),
 );
 
-// ---- Workflow templates (read-only in L1 UI) ----
+// ---- Workflow templates ----
 mastersRouter.get(
   '/workflow-templates',
   asyncHandler(async (_req, res) => {
     res.json(await prisma.workflowTemplate.findMany({ include: { stages: { orderBy: { sequence: 'asc' } } } }));
+  }),
+);
+
+// Stage-level edits only (owner role, SLA hours, evidence requirement) — adding/removing
+// stages or templates stays an API/seed-level operation for L1 (ARCHITECTURE.md §6 "Master
+// Admin CRUD for templates is modeled... but the L1 UI only exposes read + the four seeded
+// templates"); this is the one write path the UI needs for §35 "Required Evidence Rules".
+mastersRouter.patch(
+  '/workflow-stage-templates/:id',
+  requirePermission('master.edit'),
+  asyncHandler(async (req, res) => {
+    const parsed = z
+      .object({ ownerRole: z.string().optional(), slaHours: z.number().int().positive().optional(), requiredEvidence: z.boolean().optional() })
+      .safeParse(req.body);
+    if (!parsed.success) throw badRequest('Invalid stage template payload', parsed.error.flatten());
+    const stage = await prisma.workflowStageTemplate.update({ where: { id: req.params.id }, data: parsed.data });
+    res.json(stage);
   }),
 );
 
@@ -224,5 +242,97 @@ mastersRouter.post(
       .safeParse(req.body);
     if (!parsed.success) throw badRequest('Invalid SLA payload', parsed.error.flatten());
     res.status(201).json(await prisma.sLADefinition.create({ data: parsed.data }));
+  }),
+);
+mastersRouter.delete(
+  '/sla-definitions/:id',
+  requirePermission('master.delete'),
+  asyncHandler(async (req, res) => {
+    await prisma.sLADefinition.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  }),
+);
+
+// ---- Escalation rules (§22/§23 thresholds — see attention/rules.ts for how these are read) ----
+mastersRouter.get(
+  '/escalation-rules',
+  asyncHandler(async (_req, res) => {
+    res.json(await prisma.escalationRule.findMany({ orderBy: { triggerType: 'asc' } }));
+  }),
+);
+const EscalationRuleSchema = z.object({
+  triggerType: z.string().min(1),
+  thresholdHours: z.number().int().positive(),
+  escalateToRole: z.string().min(1),
+  active: z.boolean().default(true),
+});
+mastersRouter.post(
+  '/escalation-rules',
+  requirePermission('master.create'),
+  asyncHandler(async (req, res) => {
+    const parsed = EscalationRuleSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest('Invalid escalation rule payload', parsed.error.flatten());
+    const rule = await prisma.escalationRule.upsert({
+      where: { triggerType: parsed.data.triggerType },
+      create: parsed.data,
+      update: parsed.data,
+    });
+    res.status(201).json(rule);
+  }),
+);
+mastersRouter.patch(
+  '/escalation-rules/:id',
+  requirePermission('master.edit'),
+  asyncHandler(async (req, res) => {
+    const parsed = EscalationRuleSchema.partial().safeParse(req.body);
+    if (!parsed.success) throw badRequest('Invalid payload', parsed.error.flatten());
+    res.json(await prisma.escalationRule.update({ where: { id: req.params.id }, data: parsed.data }));
+  }),
+);
+
+// ---- Reason codes: Hold / Closure / Cancellation / Reopen (§35 "Reasons") ----
+// HOLD and CLOSURE codes are constrained to the shared Zod enums the hold/close endpoints
+// actually validate against (see schema below) — this master curates labels/active state for
+// those, and freely for CANCELLATION/REOPEN which have no backend enum. See schema.prisma
+// "ReasonCode" doc comment.
+mastersRouter.get(
+  '/reason-codes',
+  asyncHandler(async (req, res) => {
+    const category = typeof req.query.category === 'string' ? req.query.category : undefined;
+    res.json(await prisma.reasonCode.findMany({ where: category ? { category } : {}, orderBy: [{ category: 'asc' }, { label: 'asc' }] }));
+  }),
+);
+const ReasonCodeSchema = z.object({
+  category: z.enum(['HOLD', 'CLOSURE', 'CANCELLATION', 'REOPEN']),
+  code: z.string().min(1),
+  label: z.string().min(1),
+});
+mastersRouter.post(
+  '/reason-codes',
+  requirePermission('master.create'),
+  asyncHandler(async (req, res) => {
+    const parsed = ReasonCodeSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest('Invalid reason code payload', parsed.error.flatten());
+    if (parsed.data.category === 'HOLD' && !HOLD_REASONS.includes(parsed.data.code as (typeof HOLD_REASONS)[number])) {
+      throw badRequest(`Unknown HOLD reason code "${parsed.data.code}" — the hold endpoint only accepts: ${HOLD_REASONS.join(', ')}`);
+    }
+    if (parsed.data.category === 'CLOSURE' && !CLOSURE_REASONS.includes(parsed.data.code as (typeof CLOSURE_REASONS)[number])) {
+      throw badRequest(`Unknown CLOSURE reason code "${parsed.data.code}" — the close endpoint only accepts: ${CLOSURE_REASONS.join(', ')}`);
+    }
+    const reason = await prisma.reasonCode.upsert({
+      where: { category_code: { category: parsed.data.category, code: parsed.data.code } },
+      create: parsed.data,
+      update: { label: parsed.data.label },
+    });
+    res.status(201).json(reason);
+  }),
+);
+mastersRouter.patch(
+  '/reason-codes/:id',
+  requirePermission('master.edit'),
+  asyncHandler(async (req, res) => {
+    const parsed = z.object({ label: z.string().optional(), active: z.boolean().optional() }).safeParse(req.body);
+    if (!parsed.success) throw badRequest('Invalid payload', parsed.error.flatten());
+    res.json(await prisma.reasonCode.update({ where: { id: req.params.id }, data: parsed.data }));
   }),
 );

@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import path from 'node:path';
 import { authRouter } from './modules/auth/routes.js';
 import { mastersRouter } from './modules/masters/routes.js';
 import { usersRouter } from './modules/users/routes.js';
@@ -17,7 +16,9 @@ export function createApp() {
   app.use(helmet());
   app.use(cors({ origin: process.env.CORS_ORIGIN ?? 'http://localhost:5173', credentials: true }));
   app.use(express.json({ limit: '2mb' }));
-  app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')));
+  // No express.static('/uploads') mount: attachment files are only reachable through the
+  // authenticated, job-scoped route in modules/attachments/routes.ts (GET
+  // /jobs/:jobId/attachments/:attachmentId/file) — see that file's doc comment for why.
 
   app.get('/health', (_req, res) => res.json({ ok: true }));
 

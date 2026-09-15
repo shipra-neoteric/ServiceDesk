@@ -11,11 +11,15 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
   loading?: boolean;
 }
 
+// primary/danger use the *-strong shade, not the bare semantic color: white text on bare
+// bg-primary (#f97316) or bg-danger (#ef4444) measures 2.8:1 / 3.76:1 (axe-core accessibility
+// smoke test findings) — short of WCAG AA's 4.5:1 for this button text size. See
+// tailwind.config.ts for why these darker shades exist.
 const VARIANT_CLASSES: Record<Variant, string> = {
-  primary: 'bg-primary text-white hover:bg-primary-hover shadow-sm active:scale-95 disabled:bg-primary/50',
+  primary: 'bg-primary-strong text-white hover:bg-primary-hover shadow-sm active:scale-95 disabled:bg-primary/50',
   secondary: 'border border-border dark:border-border-dark bg-surface dark:bg-surface-dark text-content dark:text-content-dark hover:bg-surface-muted dark:hover:bg-surface-dark-muted',
   ghost: 'text-content dark:text-content-dark hover:bg-surface-muted dark:hover:bg-surface-dark-muted',
-  danger: 'bg-danger text-white hover:bg-red-600 active:scale-95 disabled:bg-danger/50',
+  danger: 'bg-danger-strong text-white hover:bg-red-700 active:scale-95 disabled:bg-danger/50',
 };
 
 const SIZE_CLASSES: Record<Size, string> = {
