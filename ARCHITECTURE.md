@@ -6,17 +6,18 @@
 
 ## 2. Backend decision
 
-**Chosen stack: Node.js + TypeScript + Express + Prisma ORM + PostgreSQL (production) / SQLite (local dev only).**
+**Chosen stack: Node.js + TypeScript + Express + Prisma ORM + MongoDB Atlas.**
 
 Reasoning:
 
 - **Language parity with the frontend.** The Nexora frontend baseline is React+TypeScript. Using TypeScript end-to-end lets domain types (statuses, workflow keys, permission keys) be shared verbatim between API and UI via a `packages/shared` workspace, which matters a lot here because the whole product is built around a strict, non-guessable state model (§6, §75 "do not use free text instead of structured operational statuses").
-- **Prisma** gives migrations, a query builder with real `WHERE` composition (required for the project-scoped, permission-scoped queries in §38/§59), and transactional writes, which are mandatory for job-number sequencing (§67), workflow transitions (§45), and audit writes that must be atomic with the state change they describe.
-- **PostgreSQL** is the documented production target because the domain needs relational integrity (foreign keys across Job Card → Stage → Material → Approval → Audit), row-level transactions, and will eventually need to support reporting queries (§33) that are painful on a document store. This satisfies §54's "avoid giant unstructured JSON records for core operational data."
-- **SQLite for local development only.** No PostgreSQL/Docker was available in this environment to verify against. The Prisma schema is written in a portable subset (no native Postgres enums — status/role/category values are `String` columns validated by shared Zod enums instead) so the same schema file runs against SQLite in dev and Postgres in any real deployment by changing one `datasource` line and one `DATABASE_URL`. **This substitution is an explicit, documented gap** — before production rollout someone must point `DATABASE_URL` at a real Postgres instance, run `prisma migrate deploy`, and re-verify (see "Remaining Gaps" in the final handoff).
+- **Prisma** gives a schema-driven data model, a query builder with real `WHERE` composition (required for the project-scoped, permission-scoped queries in §38/§59), and transactional writes, which are mandatory for job-number sequencing (§67), workflow transitions (§45), and audit writes that must be atomic with the state change they describe.
+- **Datasource history**: this project originally targeted PostgreSQL (production) with SQLite for local dev, explicitly rejecting Mongo at the time for "no transactional multi-document guarantees without extra work." That guarantee gap no longer applies to modern MongoDB Atlas (every Atlas tier, including the free M0, runs as a replica set, which is what Prisma's `$transaction` requires) — and Atlas was chosen over Postgres for the actual deployment because it removed the need to provision and operate a separate managed Postgres instance on Render, at the cost Postgres would have added no real benefit here since the schema deliberately avoids relational-only features (no native enums, no cross-table `JOIN`-heavy reporting queries yet — see §33 in the master prompt, still a gap either way).
+- The Prisma schema is written in a portable subset (no native DB enums — status/role/category values are `String` columns validated by shared Zod enums instead; ids keep Prisma's default `cuid()` generator mapped onto Mongo's required `_id` field via `@map("_id")` rather than switching to `ObjectId`, Prisma's documented "keep existing IDs" migration path). MongoDB has no composite primary keys, so the two pure join tables (`RolePermission`, `UserRole`) use their own `id` field with a `@@unique` constraint instead of a composite `@@id`.
+- MongoDB has no schema migration history the way SQL databases do — `prisma migrate` is unsupported on this connector. Schema changes are applied with `prisma db push` (`npm run prisma:push` locally, `npm run prisma:deploy` in CI/production), which is idempotent and safe to run repeatedly.
 - Express (not NestJS) — kept deliberately thin: one auth middleware, one project-scope middleware, one permission middleware, one router per domain module. No framework magic to audit.
 
-Rejected without evidence of a company standard: Mongo/Firebase/Supabase (no transactional multi-document guarantees without extra work — bad fit for workflow correctness), NestJS (adds DI ceremony not justified for team size/L1 scope).
+Rejected without evidence of a company standard: NestJS (adds DI ceremony not justified for team size/L1 scope).
 
 ## 3. Monorepo layout
 

@@ -1,23 +1,35 @@
 // ServiceDesk data model. See DOMAIN_MODEL.md for rationale.
-// Local dev uses SQLite (see ARCHITECTURE.md §2 for why, and the production-swap note).
+// Switched to MongoDB Atlas for the Render/Vercel deployment (see DEPLOYMENT.md) — the app no
+// longer targets SQLite (Render's and Vercel's filesystems are ephemeral, so a file-based DB
+// doesn't survive a redeploy or, on Vercel, even a single serverless invocation). Local dev now
+// needs a real MongoDB connection string too (a free Atlas M0 cluster, or the same Atlas
+// database used for staging — see DEPLOYMENT.md "Local development"). Atlas clusters (including
+// the free M0 tier) run as a replica set, which is required for Prisma's interactive
+// $transaction calls used throughout the workflow engine — a single standalone `mongod` does not
+// support them.
+//
+// IDs keep Prisma's default `cuid()` generator (mapped onto Mongo's required `_id` field via
+// @map("_id")) instead of switching to ObjectId — this is Prisma's documented "keep existing
+// IDs" migration path and avoids retyping every foreign key across the schema. MongoDB has no
+// composite primary keys, so the two pure join tables (RolePermission, UserRole) were given their
+// own `id` field with a `@@unique` in place of the previous `@@id([...])`.
+//
 // Status/role/permission values are validated by @servicedesk/shared zod enums, not native
-// DB enums, so this same schema file works unmodified against either provider.
+// DB enums, so this schema needed no other changes to make this switch.
 
 generator client {
   provider = "prisma-client-js"
 }
 
-// Local dev: sqlite. Production: change provider to "postgresql" and point
-// DATABASE_URL at a real Postgres instance (see ARCHITECTURE.md §2).
 datasource db {
-  provider = "sqlite"
+  provider = "mongodb"
   url      = env("DATABASE_URL")
 }
 
 // ---------- Identity & access ----------
 
 model User {
-  id           String   @id @default(cuid())
+  id           String   @id @default(cuid()) @map("_id")
   email        String   @unique
   passwordHash String
   name         String
@@ -46,7 +58,7 @@ model User {
 }
 
 model Role {
-  id          String  @id @default(cuid())
+  id          String  @id @default(cuid()) @map("_id")
   key         String  @unique
   name        String
   description String?
@@ -56,7 +68,7 @@ model Role {
 }
 
 model Permission {
-  id          String  @id @default(cuid())
+  id          String  @id @default(cuid()) @map("_id")
   key         String  @unique
   description String?
 
@@ -64,25 +76,27 @@ model Permission {
 }
 
 model RolePermission {
+  id           String     @id @default(cuid()) @map("_id")
   roleId       String
   permissionId String
   role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
   permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
-  @@id([roleId, permissionId])
+  @@unique([roleId, permissionId])
 }
 
 model UserRole {
+  id     String @id @default(cuid()) @map("_id")
   userId String
   roleId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
-  @@id([userId, roleId])
+  @@unique([userId, roleId])
 }
 
 model UserProjectAccess {
-  id            String   @id @default(cuid())
+  id            String   @id @default(cuid()) @map("_id")
   userId        String
   projectId     String
   accessLevel   String // FULL | READ_ONLY
@@ -98,7 +112,7 @@ model UserProjectAccess {
 // ---------- Organization masters ----------
 
 model Project {
-  id        String   @id @default(cuid())
+  id        String   @id @default(cuid()) @map("_id")
   code      String   @unique
   name      String
   timezone  String   @default("Asia/Kolkata")
@@ -114,7 +128,7 @@ model Project {
 }
 
 model Location {
-  id        String  @id @default(cuid())
+  id        String  @id @default(cuid()) @map("_id")
   projectId String
   parentId  String?
   type      String // BUILDING | FLOOR | ZONE | UNIT
@@ -123,13 +137,13 @@ model Location {
   active    Boolean @default(true)
 
   project  Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  parent   Location?  @relation("LocationHierarchy", fields: [parentId], references: [id])
+  parent   Location?  @relation("LocationHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   children Location[] @relation("LocationHierarchy")
   jobCards JobCard[]
 }
 
 model WorkCategory {
-  id     String  @id @default(cuid())
+  id     String  @id @default(cuid()) @map("_id")
   code   String  @unique
   name   String
   active Boolean @default(true)
@@ -141,7 +155,7 @@ model WorkCategory {
 }
 
 model WorkSubcategory {
-  id         String  @id @default(cuid())
+  id         String  @id @default(cuid()) @map("_id")
   categoryId String
   code       String
   name       String
@@ -155,7 +169,7 @@ model WorkSubcategory {
 }
 
 model JobType {
-  id     String  @id @default(cuid())
+  id     String  @id @default(cuid()) @map("_id")
   code   String  @unique
   name   String
   active Boolean @default(true)
@@ -165,7 +179,7 @@ model JobType {
 }
 
 model Priority {
-  id     String  @id @default(cuid())
+  id     String  @id @default(cuid()) @map("_id")
   code   String  @unique // LOW | NORMAL | HIGH | CRITICAL
   name   String
   rank   Int
@@ -177,7 +191,7 @@ model Priority {
 }
 
 model Holiday {
-  id        String   @id @default(cuid())
+  id        String   @id @default(cuid()) @map("_id")
   date      DateTime
   name      String
   projectId String?
@@ -188,7 +202,7 @@ model Holiday {
 // ---------- Intake ----------
 
 model ServiceRequest {
-  id                    String    @id @default(cuid())
+  id                    String    @id @default(cuid()) @map("_id")
   requestNumber         String    @unique
   projectId             String
   locationText          String
@@ -221,7 +235,7 @@ model ServiceRequest {
 // ---------- Operational core ----------
 
 model WorkflowTemplate {
-  id     String  @id @default(cuid())
+  id     String  @id @default(cuid()) @map("_id")
   key    String  @unique // SIMPLE_REPAIR | MATERIAL_REQUIRED | NEW_WORK | EMERGENCY
   name   String
   active Boolean @default(true)
@@ -231,7 +245,7 @@ model WorkflowTemplate {
 }
 
 model WorkflowStageTemplate {
-  id                 String  @id @default(cuid())
+  id                 String  @id @default(cuid()) @map("_id")
   workflowTemplateId String
   key                String // e.g. SITE_VISIT, DIAGNOSIS, MATERIAL, APPROVAL, EXECUTION, VERIFICATION
   name               String
@@ -246,7 +260,7 @@ model WorkflowStageTemplate {
 }
 
 model JobCard {
-  id                         String    @id @default(cuid())
+  id                         String    @id @default(cuid()) @map("_id")
   jobNumber                  String    @unique
   serviceRequestId           String    @unique
   projectId                  String
@@ -286,7 +300,7 @@ model JobCard {
 
   serviceRequest   ServiceRequest   @relation(fields: [serviceRequestId], references: [id])
   project          Project          @relation(fields: [projectId], references: [id])
-  location         Location?        @relation(fields: [locationId], references: [id])
+  location         Location?        @relation(fields: [locationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   category         WorkCategory     @relation(fields: [categoryId], references: [id])
   subcategory      WorkSubcategory? @relation(fields: [subcategoryId], references: [id])
   jobType          JobType          @relation(fields: [jobTypeId], references: [id])
@@ -309,7 +323,7 @@ model JobCard {
 }
 
 model JobAssignment {
-  id           String    @id @default(cuid())
+  id           String    @id @default(cuid()) @map("_id")
   jobCardId    String
   userId       String
   role         String // ENGINEER | PROCESS_COORDINATOR | PROJECT_HEAD | VERIFIER
@@ -318,12 +332,12 @@ model JobAssignment {
   unassignedAt DateTime?
   active       Boolean   @default(true)
 
-  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   user    User    @relation(fields: [userId], references: [id])
 }
 
 model JobStage {
-  id                String    @id @default(cuid())
+  id                String    @id @default(cuid()) @map("_id")
   jobCardId         String
   stageKey          String
   name              String
@@ -337,7 +351,7 @@ model JobStage {
   ownerUserId       String?
   notes             String?
 
-  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([jobCardId, stageKey])
 }
@@ -345,7 +359,7 @@ model JobStage {
 // ---------- Dependencies ----------
 
 model SiteVisit {
-  id                     String    @id @default(cuid())
+  id                     String    @id @default(cuid()) @map("_id")
   jobCardId              String
   engineerId             String
   startedAt              DateTime  @default(now())
@@ -360,12 +374,12 @@ model SiteVisit {
   temporaryFixDone       Boolean   @default(false)
   proposedCompletionDate DateTime?
 
-  jobCard  JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  jobCard  JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   engineer User    @relation(fields: [engineerId], references: [id])
 }
 
 model MaterialRequirement {
-  id               String    @id @default(cuid())
+  id               String    @id @default(cuid()) @map("_id")
   jobCardId        String
   item             String
   specification    String?
@@ -379,12 +393,12 @@ model MaterialRequirement {
   createdAt        DateTime  @default(now())
   resolvedAt       DateTime?
 
-  jobCard   JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  jobCard   JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   createdBy User    @relation("MaterialCreatedBy", fields: [createdById], references: [id])
 }
 
 model Approval {
-  id             String    @id @default(cuid())
+  id             String    @id @default(cuid()) @map("_id")
   jobCardId      String
   type           String
   requestedById  String
@@ -395,13 +409,13 @@ model Approval {
   comments       String?
   amount         Float?
 
-  jobCard     JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  jobCard     JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   requestedBy User    @relation("ApprovalRequestedBy", fields: [requestedById], references: [id])
   approver    User    @relation("ApprovalApprover", fields: [approverUserId], references: [id])
 }
 
 model VendorDependency {
-  id           String    @id @default(cuid())
+  id           String    @id @default(cuid()) @map("_id")
   jobCardId    String
   vendorName   String
   vendorRef    String? // integration-ready pointer into a future VMS
@@ -410,11 +424,11 @@ model VendorDependency {
   expectedDate DateTime?
   referenceId  String?
 
-  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
 
 model Hold {
-  id                  String    @id @default(cuid())
+  id                  String    @id @default(cuid()) @map("_id")
   jobCardId           String
   reasonCode          String
   heldByUserId        String
@@ -426,13 +440,13 @@ model Hold {
   comment             String
   statusBeforeHold    String
 
-  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
 
 // ---------- Evidence & communication ----------
 
 model Attachment {
-  id           String   @id @default(cuid())
+  id           String   @id @default(cuid()) @map("_id")
   jobCardId    String
   stageKey     String?
   type         String // PHOTO | VIDEO | DOC
@@ -443,38 +457,38 @@ model Attachment {
   uploadedById String
   uploadedAt   DateTime @default(now())
 
-  jobCard    JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  jobCard    JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   uploadedBy User    @relation(fields: [uploadedById], references: [id])
 }
 
 model Comment {
-  id        String   @id @default(cuid())
+  id        String   @id @default(cuid()) @map("_id")
   jobCardId String
   authorId  String
   body      String
   isSystem  Boolean  @default(false)
   createdAt DateTime @default(now())
 
-  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   author  User    @relation(fields: [authorId], references: [id])
 }
 
 // ---------- Closure lifecycle ----------
 
 model Verification {
-  id           String   @id @default(cuid())
+  id           String   @id @default(cuid()) @map("_id")
   jobCardId    String
   verifiedById String
   decision     String // VERIFIED | REJECTED | REWORK_REQUIRED | PARTIALLY_ACCEPTED
   comments     String?
   verifiedAt   DateTime @default(now())
 
-  jobCard    JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  jobCard    JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   verifiedBy User    @relation(fields: [verifiedById], references: [id])
 }
 
 model ReopenEvent {
-  id               String    @id @default(cuid())
+  id               String    @id @default(cuid()) @map("_id")
   jobCardId        String
   reason           String
   reopenedById     String
@@ -482,14 +496,14 @@ model ReopenEvent {
   previousClosedAt DateTime?
   severity         String    @default("MEDIUM")
 
-  jobCard    JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  jobCard    JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   reopenedBy User    @relation(fields: [reopenedById], references: [id])
 }
 
 // ---------- SLA ----------
 
 model SLADefinition {
-  id         String  @id @default(cuid())
+  id         String  @id @default(cuid()) @map("_id")
   scope      String // GLOBAL | PROJECT | CATEGORY | PRIORITY
   projectId  String?
   categoryId String?
@@ -503,20 +517,20 @@ model SLADefinition {
 }
 
 model SLAPause {
-  id               String    @id @default(cuid())
+  id               String    @id @default(cuid()) @map("_id")
   jobCardId        String
   reason           String
   accountableParty String
   startAt          DateTime  @default(now())
   endAt            DateTime?
 
-  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
 
 // ---------- Governance ----------
 
 model AuditEvent {
-  id         String   @id @default(cuid())
+  id         String   @id @default(cuid()) @map("_id")
   entityType String
   entityId   String
   action     String
@@ -532,7 +546,7 @@ model AuditEvent {
 }
 
 model Notification {
-  id        String   @id @default(cuid())
+  id        String   @id @default(cuid()) @map("_id")
   userId    String
   type      String
   channel   String   @default("IN_APP")
@@ -544,7 +558,7 @@ model Notification {
 }
 
 model Counter {
-  key   String @id
+  key   String @id @map("_id")
   value Int    @default(0)
 }
 
@@ -555,7 +569,7 @@ model Counter {
 // what the hold/close endpoints accept. CANCELLATION and REOPEN reasons are always free text
 // on the API (no enum exists for them), so those categories are pure curated suggestion lists.
 model ReasonCode {
-  id        String   @id @default(cuid())
+  id        String   @id @default(cuid()) @map("_id")
   category  String // HOLD | CLOSURE | CANCELLATION | REOPEN
   code      String
   label     String
@@ -569,7 +583,7 @@ model ReasonCode {
 // pending > 24h" etc. are Master Admin settings, not hardcoded numbers. attention/rules.ts
 // falls back to its documented default when no active rule exists for a triggerType.
 model EscalationRule {
-  id             String  @id @default(cuid())
+  id             String  @id @default(cuid()) @map("_id")
   triggerType    String  @unique // e.g. APPROVAL_OVERDUE, MATERIAL_BLOCKED, HOLD_REVIEW, NO_UPDATE
   thresholdHours Int
   escalateToRole String
@@ -579,7 +593,7 @@ model EscalationRule {
 // ---------- Legacy migration ----------
 
 model LegacyImportBatch {
-  id          String   @id @default(cuid())
+  id          String   @id @default(cuid()) @map("_id")
   sourceSheet String
   importedAt  DateTime @default(now())
   imported    Int      @default(0)
@@ -594,7 +608,7 @@ model LegacyImportBatch {
 }
 
 model LegacyImportRow {
-  id               String   @id @default(cuid())
+  id               String   @id @default(cuid()) @map("_id")
   batchId          String
   rowNumber        Int
   rawJson          String

@@ -2,12 +2,12 @@
 
 **Service Engineering & Job Card Management** for Neoteric Properties — replaces the FIR Card / Work Capture FMS spreadsheet-and-form process.
 
-See `ARCHITECTURE.md`, `DOMAIN_MODEL.md`, `WORKFLOW.md`, `PERMISSIONS.md`, `SLA_RULES.md`, `MIGRATION_FMS.md` for the design docs behind this build, and the **Handoff** section below for exactly what was built, tested, and left as a gap.
+See `ARCHITECTURE.md`, `DOMAIN_MODEL.md`, `WORKFLOW.md`, `PERMISSIONS.md`, `SLA_RULES.md`, `MIGRATION_FMS.md` for the design docs behind this build, `DEPLOYMENT.md` for deploying to MongoDB Atlas + Render + Vercel, and the **Handoff** section below for exactly what was built, tested, and left as a gap.
 
 ## Stack
 
 - **Frontend**: React 18 + TypeScript + Vite + Tailwind, TanStack Query, React Hook Form + Zod, React Router. Local `src/ui/` implements the Nexora component contracts (see `ARCHITECTURE.md` §6a for why — no `@neoteric/nexora-ui` package was available to install).
-- **Backend**: Node.js + TypeScript + Express + Prisma. SQLite for local dev, PostgreSQL is the documented production target (`ARCHITECTURE.md` §2).
+- **Backend**: Node.js + TypeScript + Express + Prisma. MongoDB Atlas (a free M0 cluster works for local dev too — see `DEPLOYMENT.md`), so local dev and production point at the same database technology.
 - **Auth**: local email+password JWT (access + refresh) as a stand-in for Nexora SSO, behind a single swappable module.
 - **E2E**: Playwright, committed under `apps/web/e2e/`, run against real dev servers + seeded data.
 
@@ -17,9 +17,11 @@ See `ARCHITECTURE.md`, `DOMAIN_MODEL.md`, `WORKFLOW.md`, `PERMISSIONS.md`, `SLA_
 npm install                                    # installs all workspaces
 cp apps/api/.env.example apps/api/.env
 cp apps/web/.env.example apps/web/.env
+# Edit apps/api/.env: set DATABASE_URL to a real MongoDB Atlas connection string (a free M0
+# cluster works — Atlas runs every tier as a replica set, which Prisma's transactions require).
 
 cd apps/api
-npx prisma db push        # creates apps/api/prisma/dev.db
+npx prisma db push        # syncs collections/indexes to your Atlas cluster
 npm run seed               # seeds masters, roles, users, 6 demo Job Cards
 npm run dev                 # http://localhost:4000
 
@@ -30,7 +32,7 @@ npm run dev                 # http://localhost:5173
 
 Demo logins (password `Password123!` for all): `admin@neotericgrp.in` (Master Admin), `servicehead@neotericgrp.in` (Service Head), `coordinator@neotericgrp.in` (Process Coordinator), `ph.gardencity@neotericgrp.in` (Project Head, Garden City + Garden City Club only), `arun.engineer@neotericgrp.in` / `meera.engineer@neotericgrp.in` (Service Engineers), `requester@neotericgrp.in` (Requester).
 
-**Note on restarting the API**: dev uses a file-based SQLite database (`apps/api/prisma/dev.db`). An already-running `npm run dev` process holds that file open — if you delete/recreate `dev.db` to reseed from scratch, **stop the running server first**, or it keeps talking to the old file handle and `prisma db push`/your reseed silently affects nothing the running server can see. This exact mistake was made and caught during this build's own verification passes (see Handoff) — always: kill node processes → delete `dev.db` → `prisma db push` → `npm run seed` → start the server, in that order.
+**Note on reseeding**: `npm run seed` is idempotent-ish per record (upserts most masters) but demo Job Cards are recreated fresh each run. To fully reset, drop the database's collections from the Atlas UI (or `mongosh`) rather than deleting a file — there is no local `dev.db` anymore now that the datasource is MongoDB, so the old "kill node processes before deleting the SQLite file" gotcha no longer applies.
 
 ## Scripts (run from repo root, workspace-aware)
 
@@ -41,7 +43,9 @@ npm run build         # shared -> api -> web
 npm run test          # api (vitest)
 ```
 
-Inside `apps/api`: `npm run prisma:migrate` (dev migrations), `npm run seed`.
+Inside `apps/api`: `npm run prisma:push` (sync schema to Atlas — MongoDB has no `migrate`, only `db push`), `npm run seed`.
+
+**Note on `packages/shared`**: it's an npm workspace package, and its `package.json` `main`/`types` point at the *compiled* `dist/`, not `src/` — required so `node dist/index.js` (the real production start command, not `tsx watch`) can actually resolve it; a plain Node ESM runtime cannot import raw `.ts` files. If you edit `packages/shared/src/*`, run `npm run build --workspace packages/shared` before your changes show up in a running `apps/api`/`apps/web` dev server (`tsx watch` and Vite both resolve the package the same way Node does).
 Inside `apps/web`: `npm run test:e2e` (Playwright — requires both dev servers running and seeded; `npm run test:e2e:ui` for the interactive runner).
 
 ## Project layout
@@ -84,6 +88,17 @@ Nearly all of these were caught by actually running the app and its tests, not b
 - **Process Coordinator attention queue expanded from 8 to 13 rules**: added no-update-in-N-hours, completion-evidence-missing, repeat-complaint-at-same-location, due-date-changed-multiple-times (backed by a new `dueDateChangeCount` field + `POST /jobs/:id/change-due-date` endpoint), and engineer-workload-overload. Every item now carries a uniform `{jobCardId, link}` shape so aggregate items (like engineer overload, which isn't about one Job Card) still navigate somewhere concrete (a filtered Job Card list) instead of nowhere.
 - **Committed Playwright suite** (`apps/web/e2e/`, 78 tests across desktop + mobile viewports, 76 passing + 2 environment-dependent skips): auth (login/logout/invalid-credentials/permission-gated nav), dashboard (KPIs, project-health drill-down, bottleneck drill-down), the full Job Card lifecycle as one sequential flow (create → duplicate detection → assign → site visit → material dependency → approval dependency → ready-to-start → start → evidence-gated completion → verify → close → reopen), cross-project access denial, all 7 Masters tabs, My Jobs, Process Coordinator, legacy import, error handling (404s, session expiry, form-data preservation on failed submit), and an axe-core accessibility + dark-mode suite.
 
+### Deployment hardening pass (MongoDB Atlas + Render/Vercel)
+
+Preparing this repo for an actual Render (backend) + Vercel (frontend) deployment surfaced one datasource decision and one real, previously-undiscovered production bug:
+
+- **Datasource switched from SQLite (dev) / documented-but-never-verified PostgreSQL (prod) to MongoDB Atlas for both.** Neither Render's nor Vercel's filesystem survives a redeploy, so file-based SQLite was never viable in production; Atlas was chosen (over actually provisioning Postgres) specifically for this deployment. See `ARCHITECTURE.md` §2 for the full reasoning, `schema.prisma`'s header comment for the Mongo-specific modeling notes (ids keep `cuid()` mapped onto `_id` rather than switching to `ObjectId`; the two pure join tables `RolePermission`/`UserRole` moved from a composite `@@id` — unsupported on Mongo — to their own `id` plus `@@unique`; several relations needed explicit `onDelete`/`onUpdate: NoAction` to break cascade cycles the Mongo connector's emulated referential actions can't resolve otherwise). No application code changed — the codebase never used raw SQL or native DB enums, so this was a schema-and-tooling change only, confirmed by `npm run typecheck` and a full `npm run build` staying clean throughout.
+- **Real bug found: `node dist/index.js` — the actual production start command — could not boot at all.** `packages/shared`'s `package.json` pointed `main`/`types` at raw `.ts` source, which only ever worked because local dev and tests both use TS-transpiling runners (`tsx`, Vitest/Vite). A plain Node ESM process cannot load `.ts` files, so a real production start would have failed immediately with `ERR_MODULE_NOT_FOUND`. This was never caught before because nobody had run the actual compiled-and-started production artifact end to end. Fixed by pointing `main`/`types` at `./dist/index.js`/`./dist/index.d.ts`; verified by deleting all `dist/` output, running the root `npm run build` (shared → api → web) from clean, and then actually starting `node apps/api/dist/index.js` and confirming it listens on its port. Tradeoff documented in this README's Scripts section: editing `packages/shared/src` now requires rebuilding it before a running dev server picks up the change.
+- **Test harness rewritten for Mongo.** The old `test/globalSetup.ts` reset state by deleting a local SQLite file — there's no equivalent for a remote Atlas cluster. It now requires a separate `TEST_DATABASE_URL` (refuses to start if unset or equal to `DATABASE_URL`) and drops that database via `prisma.$runCommandRaw({ dropDatabase: 1 })` before each run.
+- **Production-safe bootstrap seed added** (`src/seed/bootstrap.ts`, `npm run bootstrap`): seeds only structural configuration the app cannot function without (roles/permissions, job types, priorities + SLA defaults, workflow templates, hold/closure reason codes) and, from `BOOTSTRAP_ADMIN_EMAIL`/`PASSWORD`/`NAME`, exactly one real Master Admin account — deliberately no demo projects, users, or Job Cards. `seed.ts` (demo data, unchanged behavior) now reuses the same shared seeding functions instead of duplicating them.
+- **Not verified end-to-end**: no MongoDB Atlas cluster was available in this environment. Schema validation, Prisma Client generation, `npm run typecheck`, and the full `npm run build` were all confirmed clean against the new schema, and the test harness was confirmed to fail at exactly the expected point (DNS resolution of a placeholder Atlas hostname) rather than a code error — but the backend test suite, `npm run seed`/`npm run bootstrap`, and the app's actual runtime behavior against a real Mongo replica set have **not** been run. Before go-live: create a real Atlas cluster (a free M0 works, including for the E2E/test databases), set `DATABASE_URL`/`TEST_DATABASE_URL`, and re-run `npm run test --workspace apps/api` and the full Playwright suite.
+- **Attachment storage is local disk** (`apps/api/uploads/`, `multer.diskStorage`) — this was already true before this pass, but matters now: Render's default web service filesystem is ephemeral (wiped on every redeploy and on restart), so evidence photos would silently disappear. Before go-live, either attach a Render persistent Disk mounted over the `uploads` directory, or move to object storage (S3-compatible) — not done here, since it's a storage-architecture decision, not a deployment-config one.
+
 ### Explicit, documented gaps (not silently skipped — see the relevant doc)
 
 - **No real FMS export was ever available** — the importer works and is tested, but its header-alias mapping is a draft against the prompt's process description (`MIGRATION_FMS.md`), not verified real column names.
@@ -94,18 +109,21 @@ Nearly all of these were caught by actually running the app and its tests, not b
 - **Engineer-overload threshold** (6 active jobs) is a hardcoded constant, not yet a Master-configurable `EscalationRule` like the other thresholds — the row shape doesn't cleanly fit "hours" semantics.
 - **Not built**: Calendar/Planner view, hierarchical Building/Floor/Zone UI (API supports it, no screen exposes it), notification delivery beyond the `IN_APP` channel stub, IMS/VMS integration (deliberately stubbed per `ARCHITECTURE.md` §7), frontend component-level unit tests (Vitest is configured for `apps/web` but no test files exist yet — Playwright is the real frontend coverage this pass).
 - **ESLint doesn't currently scan `apps/web/e2e/`** (only `src/`) — those files are typechecked (`npm run typecheck` covers them via `e2e/tsconfig.json`) but not linted.
+- **No MongoDB Atlas cluster has been run against yet** (see "Deployment hardening pass" above) — the backend test suite, seed/bootstrap scripts, and real runtime behavior are unverified against an actual Mongo replica set.
+- **Attachments are stored on local disk**, which does not survive a Render redeploy without an attached persistent Disk (or a move to object storage) — see "Deployment hardening pass" above.
 
 ### Verified state (this pass)
 
-- **54 backend tests** passing (Vitest + Supertest) — up from 30: workflow transitions, business-hours SLA math, project/attachment-scope isolation, evidence-gated completion, the full multi-stage bookkeeping fix, 8 Process Coordinator rules, and 7 legacy-import scenarios.
-- **76 Playwright tests passing** (2 skipped when seed data doesn't happen to have an engineer with assignments — a defensive skip, not a failure) across `chromium` (desktop) and a `Pixel 5` mobile profile, including a dedicated axe-core accessibility pass and a dark-mode persistence check.
-- `npm run typecheck`, `npm run lint`, and `npm run build` are clean on both `apps/api` and `apps/web`.
+- **54 backend tests** passing (Vitest + Supertest) as of the last run against SQLite, before this session's MongoDB Atlas switch — up from 30: workflow transitions, business-hours SLA math, project/attachment-scope isolation, evidence-gated completion, the full multi-stage bookkeeping fix, 8 Process Coordinator rules, and 7 legacy-import scenarios. **Not yet re-run against MongoDB** (no Atlas cluster available in this environment — see above); the schema/tooling change itself needed no application-code changes, but the suite should be re-run against real Atlas before relying on this count again.
+- **76 Playwright tests passing** (2 skipped when seed data doesn't happen to have an engineer with assignments — a defensive skip, not a failure) across `chromium` (desktop) and a `Pixel 5` mobile profile, including a dedicated axe-core accessibility pass and a dark-mode persistence check. Also run against the pre-Atlas SQLite datasource; not yet re-run since.
+- `npm run typecheck`, `npm run lint`, and `npm run build` are clean on both `apps/api` and `apps/web`, confirmed fresh against the MongoDB schema in this session, including an actual `node apps/api/dist/index.js` boot from a clean build (see "Deployment hardening pass" above).
 - Every fix above was verified against a live, freshly-reseeded server — not inferred from reading the code.
 
 ### Production readiness before go-live
 
-1. Point `DATABASE_URL`/`schema.prisma` provider at real PostgreSQL and run `prisma migrate deploy` (currently SQLite-only, by design — see `ARCHITECTURE.md` §2).
-2. Replace local JWT auth with real Nexora SSO.
-3. Tighten `LOGIN_RATE_LIMIT` for an internet-facing deployment (current default assumes an internal network).
-4. Get the real legacy FMS export and correct `MIGRATION_FMS.md`'s header-alias table against it before trusting an import's Imported count.
-5. Re-run the full quality gate (`typecheck`, `lint`, `test`, `test:e2e`, `build`) against the production build, not just `vite dev`/`tsx watch`.
+1. Provision a MongoDB Atlas cluster (a free M0 works), point `DATABASE_URL` at it, run `npm run prisma:deploy` (`prisma db push`) and `npm run bootstrap` (creates roles/permissions/workflow templates and, if `BOOTSTRAP_ADMIN_EMAIL`/`PASSWORD` are set, the first Master Admin account — see `src/seed/bootstrap.ts`), then re-run `npm run test --workspace apps/api` and the Playwright suite against it before trusting those pass counts again. See `DEPLOYMENT.md`.
+2. Attach a Render persistent Disk over `apps/api/uploads/` (or migrate attachment storage to S3-compatible object storage) before real evidence photos are uploaded — Render's default filesystem does not survive a redeploy.
+3. Replace local JWT auth with real Nexora SSO.
+4. Tighten `LOGIN_RATE_LIMIT` for an internet-facing deployment (current default assumes an internal network).
+5. Get the real legacy FMS export and correct `MIGRATION_FMS.md`'s header-alias table against it before trusting an import's Imported count.
+6. Re-run the full quality gate (`typecheck`, `lint`, `test`, `test:e2e`, `build`) against the production build, not just `vite dev`/`tsx watch`.

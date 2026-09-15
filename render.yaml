@@ -1,0 +1,36 @@
+# Render Blueprint for the ServiceDesk API. This is optional infrastructure-as-code — you can
+# instead create the Web Service by hand in the Render dashboard using the same settings (see
+# DEPLOYMENT.md). If you do use this file: Render dashboard -> New -> Blueprint -> point at this
+# repo -> it reads this file automatically. Secrets (DATABASE_URL, JWT secrets, bootstrap admin
+# credentials) are deliberately NOT in this file — Render will prompt you to fill them in as
+# "sync: false" envVars so nothing sensitive ends up committed to git.
+services:
+  - type: web
+    name: servicedesk-api
+    runtime: node
+    plan: starter
+    rootDir: .
+    buildCommand: npm install && npm run build --workspace packages/shared && npm run build --workspace apps/api
+    startCommand: node apps/api/dist/index.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
+      - key: LOGIN_RATE_LIMIT
+        value: 20
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+      - key: BOOTSTRAP_ADMIN_NAME
+        sync: false

@@ -11,8 +11,11 @@
     "lint": "eslint src --ext .ts",
     "test": "vitest run",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
-    "seed": "tsx src/seed/seed.ts"
+    "prisma:push": "prisma db push",
+    "prisma:deploy": "prisma db push --accept-data-loss",
+    "seed": "tsx src/seed/seed.ts",
+    "bootstrap": "tsx src/seed/bootstrap.ts",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^5.19.1",
