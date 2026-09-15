@@ -1,0 +1,16 @@
+export const queryKeys = {
+  jobs: (params?: unknown) => ['jobs', params] as const,
+  job: (id: string) => ['jobs', id] as const,
+  attention: () => ['attention'] as const,
+  dashboardSummary: () => ['dashboard', 'summary'] as const,
+  projectHealth: () => ['dashboard', 'project-health'] as const,
+  bottlenecks: () => ['dashboard', 'bottlenecks'] as const,
+  engineerWorkload: () => ['dashboard', 'engineer-workload'] as const,
+  projects: () => ['masters', 'projects'] as const,
+  categories: () => ['masters', 'categories'] as const,
+  jobTypes: () => ['masters', 'job-types'] as const,
+  priorities: () => ['masters', 'priorities'] as const,
+  users: () => ['users'] as const,
+  engineers: () => ['users', 'engineers', 'workload'] as const,
+  reports: (name: string) => ['reports', name] as const,
+};

@@ -1,0 +1,572 @@
+// ServiceDesk data model. See DOMAIN_MODEL.md for rationale.
+// Local dev uses SQLite (see ARCHITECTURE.md §2 for why, and the production-swap note).
+// Status/role/permission values are validated by @servicedesk/shared zod enums, not native
+// DB enums, so this same schema file works unmodified against either provider.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Local dev: sqlite. Production: change provider to "postgresql" and point
+// DATABASE_URL at a real Postgres instance (see ARCHITECTURE.md §2).
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Identity & access ----------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  phone        String?
+  employeeId   String?
+  department   String?
+  designation  String?
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  roles           UserRole[]
+  projectAccess   UserProjectAccess[]
+  jobAssignments  JobAssignment[]
+  createdJobs     JobCard[]            @relation("JobCreatedBy")
+  auditEvents     AuditEvent[]
+  comments        Comment[]
+  attachments     Attachment[]
+  notifications   Notification[]
+  siteVisits      SiteVisit[]
+  materialsRaised MaterialRequirement[] @relation("MaterialCreatedBy")
+  approvalsAsked  Approval[]            @relation("ApprovalRequestedBy")
+  approvalsOwned  Approval[]            @relation("ApprovalApprover")
+  verifications   Verification[]
+  reopenEvents    ReopenEvent[]
+}
+
+model Role {
+  id          String @id @default(cuid())
+  key         String @unique
+  name        String
+  description String?
+
+  users       UserRole[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id          String @id @default(cuid())
+  key         String @unique
+  description String?
+
+  roles RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model UserRole {
+  userId String
+  roleId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+}
+
+model UserProjectAccess {
+  id            String   @id @default(cuid())
+  userId        String
+  projectId     String
+  accessLevel   String // FULL | READ_ONLY
+  categoryScope String? // JSON-encoded string[] of WorkCategory ids, optional
+  createdAt     DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, projectId])
+}
+
+// ---------- Organization masters ----------
+
+model Project {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  timezone  String   @default("Asia/Kolkata")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  locations       Location[]
+  userAccess      UserProjectAccess[]
+  serviceRequests ServiceRequest[]
+  jobCards        JobCard[]
+  slaDefinitions  SLADefinition[]
+  holidays        Holiday[]
+}
+
+model Location {
+  id        String   @id @default(cuid())
+  projectId String
+  parentId  String?
+  type      String // BUILDING | FLOOR | ZONE | UNIT
+  name      String
+  code      String?
+  active    Boolean  @default(true)
+
+  project  Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent   Location?  @relation("LocationHierarchy", fields: [parentId], references: [id])
+  children Location[] @relation("LocationHierarchy")
+  jobCards JobCard[]
+}
+
+model WorkCategory {
+  id     String  @id @default(cuid())
+  code   String  @unique
+  name   String
+  active Boolean @default(true)
+
+  subcategories   WorkSubcategory[]
+  serviceRequests ServiceRequest[]
+  jobCards        JobCard[]
+  slaDefinitions  SLADefinition[]
+}
+
+model WorkSubcategory {
+  id         String  @id @default(cuid())
+  categoryId String
+  code       String
+  name       String
+  active     Boolean @default(true)
+
+  category        WorkCategory     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  serviceRequests ServiceRequest[]
+  jobCards        JobCard[]
+
+  @@unique([categoryId, code])
+}
+
+model JobType {
+  id     String  @id @default(cuid())
+  code   String  @unique
+  name   String
+  active Boolean @default(true)
+
+  serviceRequests ServiceRequest[]
+  jobCards        JobCard[]
+}
+
+model Priority {
+  id      String  @id @default(cuid())
+  code    String  @unique // LOW | NORMAL | HIGH | CRITICAL
+  name    String
+  rank    Int
+  active  Boolean @default(true)
+
+  serviceRequests ServiceRequest[]
+  jobCards        JobCard[]
+  slaDefinitions  SLADefinition[]
+}
+
+model Holiday {
+  id        String   @id @default(cuid())
+  date      DateTime
+  name      String
+  projectId String?
+
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+// ---------- Intake ----------
+
+model ServiceRequest {
+  id                    String    @id @default(cuid())
+  requestNumber         String    @unique
+  projectId             String
+  locationText          String
+  categoryId            String
+  subcategoryId         String?
+  jobTypeId             String
+  priorityId            String
+  narration             String
+  source                String    @default("SERVICEDESK") // SERVICEDESK | LEGACY_FMS
+  requesterId           String?
+  requesterName         String
+  requesterContact      String?
+  desiredCompletionDate DateTime?
+  isEmergency           Boolean   @default(false)
+  safetyIssue           Boolean   @default(false)
+  vendorRelated         Boolean   @default(false)
+  assetTag              String?
+  unitNumber            String?
+  duplicateOfId         String?
+  createdAt             DateTime  @default(now())
+
+  project     Project          @relation(fields: [projectId], references: [id])
+  category    WorkCategory     @relation(fields: [categoryId], references: [id])
+  subcategory WorkSubcategory? @relation(fields: [subcategoryId], references: [id])
+  jobType     JobType          @relation(fields: [jobTypeId], references: [id])
+  priority    Priority         @relation(fields: [priorityId], references: [id])
+  jobCard     JobCard?
+}
+
+// ---------- Operational core ----------
+
+model WorkflowTemplate {
+  id     String  @id @default(cuid())
+  key    String  @unique // SIMPLE_REPAIR | MATERIAL_REQUIRED | NEW_WORK | EMERGENCY
+  name   String
+  active Boolean @default(true)
+
+  stages   WorkflowStageTemplate[]
+  jobCards JobCard[]
+}
+
+model WorkflowStageTemplate {
+  id                 String  @id @default(cuid())
+  workflowTemplateId String
+  key                String // e.g. SITE_VISIT, DIAGNOSIS, MATERIAL, APPROVAL, EXECUTION, VERIFICATION
+  name               String
+  sequence           Int
+  ownerRole          String
+  slaHours           Int
+  requiredEvidence   Boolean @default(false)
+
+  template WorkflowTemplate @relation(fields: [workflowTemplateId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowTemplateId, key])
+}
+
+model JobCard {
+  id                       String    @id @default(cuid())
+  jobNumber                String    @unique
+  serviceRequestId         String    @unique
+  projectId                String
+  locationId               String?
+  locationText             String
+  categoryId               String
+  subcategoryId            String?
+  jobTypeId                String
+  priorityId               String
+  workflowTemplateId       String
+  status                   String    @default("RAISED")
+  currentStageKey          String?
+  currentOwnerUserId       String?
+  currentOwnerRole         String?
+  nextAction               String?
+  nextActionDueAt          DateTime?
+  targetCompletionAt       DateTime?
+  originalTargetCompletionAt DateTime?
+  createdById              String
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+  closedAt                 DateTime?
+  isEmergency              Boolean   @default(false)
+  safetyIssue              Boolean   @default(false)
+  repeatComplaint          Boolean   @default(false)
+  assetTag                 String?
+  unitNumber               String?
+  reopenCount              Int       @default(0)
+  statusBeforeHold         String?
+  source                   String    @default("SERVICEDESK") // SERVICEDESK | LEGACY_FMS
+  legacyRef                String?
+  legacyPlannedDate        DateTime?
+  legacyActualDate         DateTime?
+  legacyStatusText         String?
+  legacyDelayText          String?
+
+  serviceRequest   ServiceRequest    @relation(fields: [serviceRequestId], references: [id])
+  project          Project           @relation(fields: [projectId], references: [id])
+  location         Location?         @relation(fields: [locationId], references: [id])
+  category         WorkCategory      @relation(fields: [categoryId], references: [id])
+  subcategory      WorkSubcategory?  @relation(fields: [subcategoryId], references: [id])
+  jobType          JobType           @relation(fields: [jobTypeId], references: [id])
+  priority         Priority          @relation(fields: [priorityId], references: [id])
+  workflowTemplate WorkflowTemplate  @relation(fields: [workflowTemplateId], references: [id])
+  createdBy        User              @relation("JobCreatedBy", fields: [createdById], references: [id])
+
+  assignments  JobAssignment[]
+  stages       JobStage[]
+  siteVisits   SiteVisit[]
+  materials    MaterialRequirement[]
+  approvals    Approval[]
+  vendorDeps   VendorDependency[]
+  holds        Hold[]
+  attachments  Attachment[]
+  comments     Comment[]
+  verifications Verification[]
+  reopenEvents ReopenEvent[]
+  slaPauses    SLAPause[]
+}
+
+model JobAssignment {
+  id           String    @id @default(cuid())
+  jobCardId    String
+  userId       String
+  role         String // ENGINEER | PROCESS_COORDINATOR | PROJECT_HEAD | VERIFIER
+  assignedById String
+  assignedAt   DateTime  @default(now())
+  unassignedAt DateTime?
+  active       Boolean   @default(true)
+
+  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id])
+}
+
+model JobStage {
+  id                String    @id @default(cuid())
+  jobCardId         String
+  stageKey          String
+  name              String
+  sequence          Int
+  status            String    @default("PENDING") // PENDING | ACTIVE | DONE | SKIPPED | BLOCKED
+  plannedStartAt    DateTime?
+  plannedDueAt      DateTime?
+  actualStartAt     DateTime?
+  actualCompletedAt DateTime?
+  ownerRole         String?
+  ownerUserId       String?
+  notes             String?
+
+  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+
+  @@unique([jobCardId, stageKey])
+}
+
+// ---------- Dependencies ----------
+
+model SiteVisit {
+  id                     String    @id @default(cuid())
+  jobCardId              String
+  engineerId             String
+  startedAt              DateTime  @default(now())
+  completedAt            DateTime?
+  notes                  String?
+  diagnosis              String?
+  rootCause              String?
+  materialRequired       Boolean   @default(false)
+  externalRequired       Boolean   @default(false)
+  approvalRequired       Boolean   @default(false)
+  safetyConcern          Boolean   @default(false)
+  temporaryFixDone       Boolean   @default(false)
+  proposedCompletionDate DateTime?
+
+  jobCard  JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  engineer User    @relation(fields: [engineerId], references: [id])
+}
+
+model MaterialRequirement {
+  id               String    @id @default(cuid())
+  jobCardId        String
+  item             String
+  specification    String?
+  quantity         Float
+  unit             String
+  requiredByDate   DateTime?
+  status           String    @default("REQUIREMENT_RAISED")
+  availabilityNote String?
+  externalRef      String? // integration-ready pointer into a future IMS
+  createdById      String
+  createdAt        DateTime  @default(now())
+  resolvedAt       DateTime?
+
+  jobCard   JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  createdBy User    @relation("MaterialCreatedBy", fields: [createdById], references: [id])
+}
+
+model Approval {
+  id             String    @id @default(cuid())
+  jobCardId      String
+  type           String
+  requestedById  String
+  approverUserId String
+  requestedAt    DateTime  @default(now())
+  decision       String    @default("PENDING")
+  decisionAt     DateTime?
+  comments       String?
+  amount         Float?
+
+  jobCard     JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  requestedBy User    @relation("ApprovalRequestedBy", fields: [requestedById], references: [id])
+  approver    User    @relation("ApprovalApprover", fields: [approverUserId], references: [id])
+}
+
+model VendorDependency {
+  id           String    @id @default(cuid())
+  jobCardId    String
+  vendorName   String
+  vendorRef    String? // integration-ready pointer into a future VMS
+  workRequired String
+  status       String    @default("PENDING")
+  expectedDate DateTime?
+  referenceId  String?
+
+  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+}
+
+model Hold {
+  id                 String    @id @default(cuid())
+  jobCardId          String
+  reasonCode         String
+  heldByUserId       String
+  dependencyOwnerRole String
+  startAt            DateTime  @default(now())
+  endAt              DateTime?
+  reviewDueAt        DateTime
+  slaPauses          Boolean   @default(true)
+  comment            String
+  statusBeforeHold   String
+
+  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+}
+
+// ---------- Evidence & communication ----------
+
+model Attachment {
+  id         String   @id @default(cuid())
+  jobCardId  String
+  stageKey   String?
+  type       String // PHOTO | VIDEO | DOC
+  phase      String? // BEFORE | DURING | AFTER
+  fileName   String
+  path       String
+  caption    String?
+  uploadedById String
+  uploadedAt DateTime @default(now())
+
+  jobCard    JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  uploadedBy User    @relation(fields: [uploadedById], references: [id])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  jobCardId String
+  authorId  String
+  body      String
+  isSystem  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  author  User    @relation(fields: [authorId], references: [id])
+}
+
+// ---------- Closure lifecycle ----------
+
+model Verification {
+  id           String   @id @default(cuid())
+  jobCardId    String
+  verifiedById String
+  decision     String // VERIFIED | REJECTED | REWORK_REQUIRED | PARTIALLY_ACCEPTED
+  comments     String?
+  verifiedAt   DateTime @default(now())
+
+  jobCard    JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  verifiedBy User    @relation(fields: [verifiedById], references: [id])
+}
+
+model ReopenEvent {
+  id               String   @id @default(cuid())
+  jobCardId        String
+  reason           String
+  reopenedById     String
+  reopenedAt       DateTime @default(now())
+  previousClosedAt DateTime?
+  severity         String   @default("MEDIUM")
+
+  jobCard    JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  reopenedBy User    @relation(fields: [reopenedById], references: [id])
+}
+
+// ---------- SLA ----------
+
+model SLADefinition {
+  id         String  @id @default(cuid())
+  scope      String // GLOBAL | PROJECT | CATEGORY | PRIORITY
+  projectId  String?
+  categoryId String?
+  priorityId String?
+  stageKey   String?
+  hours      Int
+
+  project  Project?      @relation(fields: [projectId], references: [id])
+  category WorkCategory? @relation(fields: [categoryId], references: [id])
+  priority Priority?     @relation(fields: [priorityId], references: [id])
+}
+
+model SLAPause {
+  id               String    @id @default(cuid())
+  jobCardId        String
+  reason           String
+  accountableParty String
+  startAt          DateTime  @default(now())
+  endAt            DateTime?
+
+  jobCard JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+}
+
+// ---------- Governance ----------
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  action     String
+  actorId    String
+  occurredAt DateTime @default(now())
+  oldValue   String? // JSON-encoded
+  newValue   String? // JSON-encoded
+  reason     String?
+
+  actor User @relation(fields: [actorId], references: [id])
+
+  @@index([entityType, entityId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  channel   String   @default("IN_APP")
+  payload   String // JSON-encoded
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Counter {
+  key   String @id
+  value Int    @default(0)
+}
+
+// ---------- Legacy migration ----------
+
+model LegacyImportBatch {
+  id          String   @id @default(cuid())
+  sourceSheet String
+  importedAt  DateTime @default(now())
+  imported    Int      @default(0)
+  skipped     Int      @default(0)
+  errors      String? // JSON-encoded [{row, reason}]
+
+  rows LegacyImportRow[]
+}
+
+model LegacyImportRow {
+  id         String  @id @default(cuid())
+  batchId    String
+  rowNumber  Int
+  rawJson    String
+  status     String  @default("PENDING") // PENDING | IMPORTED | ERROR
+  errorText  String?
+
+  batch LegacyImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+}
