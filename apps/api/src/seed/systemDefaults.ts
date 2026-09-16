@@ -100,10 +100,14 @@ export async function seedJobTypesAndPriorities() {
   for (const p of PRIORITIES) {
     priorityRecords[p.code] = await prisma.priority.upsert({ where: { code: p.code }, create: { code: p.code, name: p.name, rank: p.rank }, update: {} });
     await prisma.sLADefinition.deleteMany({ where: { scope: 'PRIORITY', priorityId: priorityRecords[p.code].id, stageKey: null } });
-    await prisma.sLADefinition.create({ data: { scope: 'PRIORITY', priorityId: priorityRecords[p.code].id, hours: p.hours } });
+    // projectId/categoryId/stageKey explicit null, not omitted — this delete-then-create pair is
+    // meant to make re-running bootstrap idempotent, but on MongoDB the deleteMany's `stageKey:
+    // null` filter only matches documents where that field is present-and-null; omitting it here
+    // would make every bootstrap run insert a duplicate row instead of replacing the old one.
+    await prisma.sLADefinition.create({ data: { scope: 'PRIORITY', priorityId: priorityRecords[p.code].id, projectId: null, categoryId: null, stageKey: null, hours: p.hours } });
   }
   await prisma.sLADefinition.deleteMany({ where: { scope: 'GLOBAL', projectId: null, categoryId: null, priorityId: null, stageKey: null } });
-  await prisma.sLADefinition.create({ data: { scope: 'GLOBAL', hours: 48 } });
+  await prisma.sLADefinition.create({ data: { scope: 'GLOBAL', projectId: null, categoryId: null, priorityId: null, stageKey: null, hours: 48 } });
   return { jobTypeRecords, priorityRecords };
 }
 

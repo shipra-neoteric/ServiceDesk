@@ -36,7 +36,11 @@ export async function seedRolesAndPermissions() {
     roleRecords[roleKey] = role;
     const permissionRows = await prisma.permission.findMany({ where: { key: { in: perms } } });
     await prisma.rolePermission.deleteMany({ where: { roleId: role.id } });
-    await prisma.rolePermission.createMany({ data: permissionRows.map((p) => ({ roleId: role.id, permissionId: p.id })) });
+    // Empty `data` throws on MongoDB (unlike a harmless no-op on SQL) — guard defensively even
+    // though every currently-defined role grants at least one permission.
+    if (permissionRows.length > 0) {
+      await prisma.rolePermission.createMany({ data: permissionRows.map((p) => ({ roleId: role.id, permissionId: p.id })) });
+    }
   }
   return roleRecords;
 }

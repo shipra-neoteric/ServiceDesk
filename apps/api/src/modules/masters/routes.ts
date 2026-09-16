@@ -160,7 +160,9 @@ mastersRouter.post(
   asyncHandler(async (req, res) => {
     const parsed = z.object({ date: z.string().datetime(), name: z.string().min(1), projectId: z.string().nullable().optional() }).safeParse(req.body);
     if (!parsed.success) throw badRequest('Invalid holiday payload', parsed.error.flatten());
-    res.status(201).json(await prisma.holiday.create({ data: { ...parsed.data, date: new Date(parsed.data.date) } }));
+    // projectId defaulted to null (not left undefined) — see slaEngine.ts's global-holiday query
+    // for why MongoDB needs this written explicitly rather than omitted.
+    res.status(201).json(await prisma.holiday.create({ data: { ...parsed.data, projectId: parsed.data.projectId ?? null, date: new Date(parsed.data.date) } }));
   }),
 );
 
@@ -187,9 +189,13 @@ mastersRouter.post(
     if (!parsed.success) throw badRequest('Invalid payload', parsed.error.flatten());
     const permissions = await prisma.permission.findMany({ where: { key: { in: parsed.data.permissionKeys } } });
     await prisma.rolePermission.deleteMany({ where: { roleId: req.params.roleId } });
-    await prisma.rolePermission.createMany({
-      data: permissions.map((p) => ({ roleId: req.params.roleId, permissionId: p.id })),
-    });
+    // Empty `data` throws on MongoDB (unlike a harmless no-op on SQL) — stripping a role down to
+    // zero permissions is a valid action, so guard rather than assume there's always something.
+    if (permissions.length > 0) {
+      await prisma.rolePermission.createMany({
+        data: permissions.map((p) => ({ roleId: req.params.roleId, permissionId: p.id })),
+      });
+    }
     res.json({ ok: true });
   }),
 );

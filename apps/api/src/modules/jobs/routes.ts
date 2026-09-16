@@ -253,7 +253,9 @@ jobsRouter.post(
   requirePermission('job.edit'),
   asyncHandler(async (req, res) => {
     const job = await loadScopedJob(req.access!, req.params.id);
-    await prisma.siteVisit.create({ data: { jobCardId: job.id, engineerId: req.access!.userId } });
+    // completedAt: null explicit, not omitted — see the "no open site visit" lookup below,
+    // which filters completedAt: null and (on MongoDB) only matches present-and-null fields.
+    await prisma.siteVisit.create({ data: { jobCardId: job.id, engineerId: req.access!.userId, completedAt: null } });
     await runSimpleCommand({ jobCardId: job.id, command: 'siteVisitStart', actorId: req.access!.userId });
     res.json(await loadScopedJob(req.access!, job.id));
   }),
@@ -535,6 +537,9 @@ jobsRouter.post(
     if (!parsed.success) throw badRequest('Invalid hold payload', parsed.error.flatten());
 
     await prisma.$transaction(async (tx) => {
+      // endAt: null explicit on both creates below, not omitted — resume's "open hold"/"open
+      // pause" lookups filter endAt: null, which on MongoDB only matches present-and-null
+      // fields, not fields that were simply never written.
       await tx.hold.create({
         data: {
           jobCardId: job.id,
@@ -545,10 +550,11 @@ jobsRouter.post(
           comment: parsed.data.comment,
           slaPauses: parsed.data.slaPauses,
           statusBeforeHold: job.status,
+          endAt: null,
         },
       });
       if (parsed.data.slaPauses) {
-        await tx.sLAPause.create({ data: { jobCardId: job.id, reason: parsed.data.reasonCode, accountableParty: parsed.data.dependencyOwnerRole } });
+        await tx.sLAPause.create({ data: { jobCardId: job.id, reason: parsed.data.reasonCode, accountableParty: parsed.data.dependencyOwnerRole, endAt: null } });
       }
       await tx.jobCard.update({ where: { id: job.id }, data: { status: 'ON_HOLD', statusBeforeHold: job.status } });
       await writeAudit(tx, { entityType: 'JobCard', entityId: job.id, action: 'HOLD', actorId: req.access!.userId, newValue: parsed.data });

@@ -85,6 +85,10 @@ export async function createJobCard(ctx: AccessContext, input: CreateServiceRequ
         workflowTemplateId: template.id,
         status: 'RAISED',
         currentStageKey: firstStage.key,
+        // Explicit null, not omitted: MongoDB only matches `field: null` filters (attention
+        // rules' NO_OWNER check) against documents where the field is present-and-null, not
+        // documents where it was never written at all — see rules.ts's noOwner query.
+        currentOwnerUserId: null,
         nextAction: firstStage.name,
         nextActionDueAt: firstStagePlannedDueAt,
         targetCompletionAt: input.desiredCompletionDate ? new Date(input.desiredCompletionDate) : null,

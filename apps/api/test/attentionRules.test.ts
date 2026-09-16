@@ -146,6 +146,8 @@ describe('Process Coordinator attention rules (computeAttentionItems)', () => {
         reviewDueAt: new Date(Date.now() - 3_600_000),
         comment: 'Test hold',
         statusBeforeHold: 'RAISED',
+        endAt: null, // matches the real /hold route (see jobs/routes.ts) — MongoDB's `endAt: null`
+        // query only matches present-and-null fields, not fields that were simply never written.
       },
     });
     const items = await computeAttentionItems(ctx);

@@ -97,8 +97,11 @@ async function main() {
 
   console.log('Seeding holidays...');
   await prisma.holiday.deleteMany({});
-  await prisma.holiday.create({ data: { date: new Date(`${new Date().getFullYear()}-10-02`), name: 'Gandhi Jayanti' } });
-  await prisma.holiday.create({ data: { date: new Date(`${new Date().getFullYear()}-12-25`), name: 'Christmas' } });
+  // projectId: null explicit, not omitted — slaEngine's business-hours calendar matches global
+  // holidays via `OR: [{projectId}, {projectId: null}]`, which on MongoDB only matches
+  // present-and-null fields, not fields that were simply never written.
+  await prisma.holiday.create({ data: { date: new Date(`${new Date().getFullYear()}-10-02`), name: 'Gandhi Jayanti', projectId: null } });
+  await prisma.holiday.create({ data: { date: new Date(`${new Date().getFullYear()}-12-25`), name: 'Christmas', projectId: null } });
 
   console.log('Seeding reason codes...');
   await seedReasonCodes();
