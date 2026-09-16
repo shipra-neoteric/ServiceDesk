@@ -40,6 +40,8 @@ export const PERMISSION_KEYS = [
   'user.create',
   'user.edit',
   'user.deactivate',
+  'user.delete',
+  'user.reset_password',
   'audit.view',
 ] as const;
 export const PermissionKeySchema = z.enum(PERMISSION_KEYS);

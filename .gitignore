@@ -12,6 +12,7 @@ coverage/
 apps/web/test-results/
 apps/web/playwright-report/
 apps/web/e2e/.cache/
+.localmongo/
 
 # Internal docs kept locally for reference but not published to GitHub — see README.md, which
 # stays tracked as the repo's landing page. Untracked with `git rm --cached`, not deleted from
