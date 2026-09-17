@@ -4,13 +4,19 @@
 # repo -> it reads this file automatically. Secrets (DATABASE_URL, JWT secrets, bootstrap admin
 # credentials) are deliberately NOT in this file — Render will prompt you to fill them in as
 # "sync: false" envVars so nothing sensitive ends up committed to git.
+#
+# buildCommand uses `npm ci`, not `npm install` — the first real deploy's `npm install` installed
+# only ~209 packages (identical count/timing on two separate attempts, pointing at a reused/stale
+# node_modules cache) and silently omitted @types/node even though it kept typescript, breaking
+# the apps/api build with TS2688. `npm ci` always wipes node_modules and installs exactly what
+# package-lock.json specifies, sidestepping whatever caused that partial state.
 services:
   - type: web
     name: servicedesk-api
     runtime: node
     plan: starter
     rootDir: .
-    buildCommand: npm install && npm run build --workspace packages/shared && npm run build --workspace apps/api
+    buildCommand: npm ci && npm run build --workspace packages/shared && npm run build --workspace apps/api
     startCommand: node apps/api/dist/index.js
     healthCheckPath: /health
     envVars:
