@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '../src/lib/db.js';
-import { runLegacyImportBatch, mapCsvRow, type RawFmsRow } from '../src/modules/legacyImport/mapping.js';
+import { runLegacyImportBatch, mapCsvRow, findHeaderRowIndex, createLegacyImportBatch, processLegacyImportBatch, resolveAmbiguousProjectRows, type RawFmsRow } from '../src/modules/legacyImport/mapping.js';
 import { ensurePermissions, makeRole, makeUser, makeProject, makeBaseMasters } from './fixtures.js';
 import type { AccessContext } from '../src/lib/accessContext.js';
 
@@ -35,6 +35,24 @@ describe('Legacy FMS import', () => {
     const headers = ['Ref', 'Property', 'Work Category', 'Narration', 'Location'];
     const row = mapCsvRow(headers, ['R1', 'Legacy Test Property', 'Test Category', 'Leaky tap', 'Block A']);
     expect(row).toEqual({ reference: 'R1', property: 'Legacy Test Property', workCategory: 'Test Category', narration: 'Leaky tap', locationText: 'Block A' });
+  });
+
+  it('finds the real header row even when a legend/title block sits above it (real FMS export shape)', () => {
+    const records = [
+      ['', '', '', 'Site Visit', ''],
+      ['Who', 'Akhilesh,Sagar', '', 'Site Engineer', ''],
+      ['Timestamp', 'Property', 'Work Category', 'Narration', 'Planned'],
+      ['08/07/2022', 'School', 'Others', 'Test issue', '09/07/2022'],
+    ];
+    expect(findHeaderRowIndex(records)).toBe(2);
+  });
+
+  it('treats row 0 as the header when it already looks like one (no legend block)', () => {
+    const records = [
+      ['Reference', 'Property', 'Work Category', 'Narration'],
+      ['R1', 'School', 'Others', 'Test issue'],
+    ];
+    expect(findHeaderRowIndex(records)).toBe(0);
   });
 
   it('imports a valid row, marks it source=LEGACY_FMS, and leaves it RAISED with no completion date', async () => {
@@ -95,6 +113,47 @@ describe('Legacy FMS import', () => {
     expect(report.ambiguous).toBe(1);
     expect(report.rows[0].reasonText).toMatch(/No unique Project match/);
     expect(report.warnings.some((w) => w.includes('confident'))).toBe(true);
+  });
+
+  it('an exact Project name match wins outright even if other Projects contain it as a substring', async () => {
+    await prisma.project.upsert({ where: { code: 'SCHOOL' }, create: { code: 'SCHOOL', name: 'School' }, update: { name: 'School', active: true } });
+    await prisma.project.upsert({ where: { code: 'CITY_SCHOOL' }, create: { code: 'CITY_SCHOOL', name: 'City School' }, update: { name: 'City School', active: true } });
+
+    const rows: RawFmsRow[] = [{ reference: 'FMS-EXACT-1', property: '  school  ', workCategory: 'Test Category', narration: 'Exact match test', locationText: 'Gate' }];
+    const report = await runLegacyImportBatch(ctx, 'test.csv', rows);
+    expect(report.rows[0].status).toBe('IMPORTED');
+    const job = await prisma.jobCard.findUniqueOrThrow({ where: { id: report.rows[0].matchedJobCardId! } });
+    expect(job.projectId).toBe((await prisma.project.findUniqueOrThrow({ where: { code: 'SCHOOL' } })).id);
+  });
+
+  it('surfaces the candidate Projects and lets the user resolve "School" once for the whole batch', async () => {
+    const cityCampus = await prisma.project.upsert({ where: { code: 'CAMPUS_SCHOOL_EAST' }, create: { code: 'CAMPUS_SCHOOL_EAST', name: 'Campus School East Wing' }, update: { name: 'Campus School East Wing', active: true } });
+    await prisma.project.upsert({ where: { code: 'CAMPUS_SCHOOL_WEST' }, create: { code: 'CAMPUS_SCHOOL_WEST', name: 'Campus School West Wing' }, update: { name: 'Campus School West Wing', active: true } });
+
+    // Neither name is an exact match for "Campus School", and both contain it as a substring —
+    // this is the real AMBIGUOUS case: multiple valid candidates, none picked arbitrarily.
+    const rows: RawFmsRow[] = [
+      { reference: 'FMS-AMB-1', property: 'Campus School', workCategory: 'Test Category', narration: 'Row A', locationText: 'Gate 1' },
+      { reference: 'FMS-AMB-2', property: 'campus   school', workCategory: 'Test Category', narration: 'Row B', locationText: 'Gate 2' },
+    ];
+    const batch = await createLegacyImportBatch('school-ambiguous.csv', rows.length);
+    const first = await processLegacyImportBatch(batch.id, ctx, rows);
+
+    expect(first.ambiguous).toBe(2);
+    expect(first.rows[0].reasonText).toMatch(/Multiple Projects match/);
+    expect(first.rows[0].candidates?.field).toBe('project');
+    const candidateNames = first.rows[0].candidates?.options.map((o) => o.name).sort();
+    expect(candidateNames).toEqual(['Campus School East Wing', 'Campus School West Wing']);
+
+    // User picks "Campus School East Wing" once — it must resolve BOTH ambiguous rows from this batch,
+    // since "Campus School" and "campus   school" normalize to the same text.
+    const resolved = await resolveAmbiguousProjectRows(batch.id, ctx, 'Campus School', cityCampus.id);
+    expect(resolved.imported).toBe(2);
+    expect(resolved.ambiguous).toBe(0);
+    for (const r of resolved.rows) {
+      const job = await prisma.jobCard.findUniqueOrThrow({ where: { id: r.matchedJobCardId! } });
+      expect(job.projectId).toBe(cityCampus.id);
+    }
   });
 
   it('marks a row SKIPPED when a required field is missing', async () => {

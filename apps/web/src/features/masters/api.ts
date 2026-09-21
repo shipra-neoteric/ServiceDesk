@@ -165,6 +165,11 @@ export const useCreateReasonCode = () => {
   });
 };
 // ---- Legacy FMS import ----
+export interface LegacyImportRowCandidates {
+  field: 'project';
+  rawText: string;
+  options: { id: string; name: string }[];
+}
 export interface LegacyImportRow {
   id: string;
   rowNumber: number;
@@ -172,11 +177,14 @@ export interface LegacyImportRow {
   legacyRef: string | null;
   matchedJobCardId: string | null;
   reasonText: string | null;
+  candidatesJson: string | null;
 }
 export interface LegacyImportBatch {
   id: string;
   sourceSheet: string;
   importedAt: string;
+  status: 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  totalRows: number;
   imported: number;
   skipped: number;
   ambiguous: number;
@@ -185,16 +193,37 @@ export interface LegacyImportBatch {
   warnings: string[];
   rows?: LegacyImportRow[];
 }
+// Batches still being processed change frequently (a real import can run for many minutes), so
+// poll while any are in flight; otherwise there's nothing changing and polling would be wasted.
 export const useLegacyImportBatches = () =>
-  useQuery({ queryKey: ['legacy-import'], queryFn: async () => (await apiClient.get<LegacyImportBatch[]>('/legacy-import')).data });
+  useQuery({
+    queryKey: ['legacy-import'],
+    queryFn: async () => (await apiClient.get<LegacyImportBatch[]>('/legacy-import')).data,
+    refetchInterval: (query) => (query.state.data?.some((b) => b.status === 'PROCESSING') ? 3000 : false),
+  });
 export const useUploadLegacyImport = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (file: File) => {
       const form = new FormData();
       form.append('file', file);
+      // The upload only has to wait for the CSV to be parsed and the batch row created — actual
+      // row-by-row processing happens after the response, in the background (see routes.ts) — so
+      // the default apiClient timeout is fine here; the UI then polls this batch's status.
       return (await apiClient.post<LegacyImportBatch>('/legacy-import', form, { headers: { 'Content-Type': 'multipart/form-data' } })).data;
     },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['legacy-import'] }),
+  });
+};
+
+// Resolves every AMBIGUOUS row in a batch whose Property text matched more than one active
+// Project master (e.g. "School") to one chosen Project, and remembers that choice for the rest
+// of the batch's rows with the same raw text.
+export const useResolveLegacyImportProject = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ batchId, rawText, projectId }: { batchId: string; rawText: string; projectId: string }) =>
+      (await apiClient.post<LegacyImportBatch>(`/legacy-import/${batchId}/resolve-project`, { rawText, projectId })).data,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['legacy-import'] }),
   });
 };

@@ -33,6 +33,7 @@ import {
   useUpdateReasonCode,
   useLegacyImportBatches,
   useUploadLegacyImport,
+  useResolveLegacyImportProject,
   type ReasonCode,
   type LegacyImportRow,
   type LegacyImportBatch,
@@ -641,9 +642,9 @@ function LegacyImportTab() {
               const file = e.target.files?.[0];
               if (!file) return;
               try {
-                const report = await upload.mutateAsync(file);
-                push(`Imported ${report.imported}, duplicate ${report.duplicate}, ambiguous ${report.ambiguous}, skipped ${report.skipped}, failed ${report.failed}.`, 'success');
-                setExpanded(report.id);
+                const batch = await upload.mutateAsync(file);
+                push(`Import started: ${batch.totalRows} row(s) queued. This can take a while for large files — watch Import History below for progress.`, 'success');
+                setExpanded(batch.id);
               } catch (err) {
                 push((err as { message?: string })?.message ?? 'Import failed', 'error');
               }
@@ -666,13 +667,23 @@ function LegacyImportTab() {
                   <span className="font-medium text-content dark:text-content-dark">
                     {b.sourceSheet} · {new Date(b.importedAt).toLocaleString('en-IN')}
                   </span>
-                  <span className="flex flex-wrap gap-1">
-                    <Badge tone="success">{b.imported} imported</Badge>
-                    <Badge tone="neutral">{b.duplicate} duplicate</Badge>
-                    <Badge tone="warning">{b.ambiguous} ambiguous</Badge>
-                    <Badge tone="neutral">{b.skipped} skipped</Badge>
-                    {b.failed > 0 && <Badge tone="danger">{b.failed} failed</Badge>}
-                  </span>
+                  {b.status === 'PROCESSING' ? (
+                    <span className="flex flex-wrap items-center gap-1">
+                      <Badge tone="neutral">
+                        Processing… {b.imported + b.skipped + b.ambiguous + b.duplicate + b.failed}/{b.totalRows}
+                      </Badge>
+                    </span>
+                  ) : b.status === 'FAILED' ? (
+                    <Badge tone="danger">Failed</Badge>
+                  ) : (
+                    <span className="flex flex-wrap gap-1">
+                      <Badge tone="success">{b.imported} imported</Badge>
+                      <Badge tone="neutral">{b.duplicate} duplicate</Badge>
+                      <Badge tone="warning">{b.ambiguous} ambiguous</Badge>
+                      <Badge tone="neutral">{b.skipped} skipped</Badge>
+                      {b.failed > 0 && <Badge tone="danger">{b.failed} failed</Badge>}
+                    </span>
+                  )}
                 </button>
                 {b.warnings.length > 0 && (
                   <ul className="mt-2 list-inside list-disc text-xs text-warning-strong dark:text-warning">
@@ -696,6 +707,12 @@ function BatchRowDetail({ batchId }: { batchId: string }) {
   const batch = batches?.find((b) => b.id === batchId);
   // The list endpoint doesn't include row detail — fetch it directly.
   const [rows, setRows] = useState<LegacyImportRow[] | null>(null);
+  const reload = () => {
+    setRows(null);
+    apiClient.get<LegacyImportBatch>(`/legacy-import/${batchId}`).then((res) => {
+      setRows(res.data.rows ?? []);
+    });
+  };
   useEffect(() => {
     let cancelled = false;
     setRows(null);
@@ -707,30 +724,95 @@ function BatchRowDetail({ batchId }: { batchId: string }) {
     };
   }, [batchId]);
   if (!batch) return null;
+
+  // Every AMBIGUOUS-with-multiple-Project-candidates row sharing the same raw property text
+  // resolves together, so group them and show one picker per distinct raw text rather than one
+  // per row.
+  const unresolvedGroups = new Map<string, { rawText: string; options: { id: string; name: string }[]; rowNumbers: number[] }>();
+  for (const r of rows ?? []) {
+    if (r.status !== 'AMBIGUOUS' || !r.candidatesJson) continue;
+    const candidates = JSON.parse(r.candidatesJson) as { field: 'project'; rawText: string; options: { id: string; name: string }[] };
+    if (candidates.field !== 'project') continue;
+    const existing = unresolvedGroups.get(candidates.rawText);
+    if (existing) existing.rowNumbers.push(r.rowNumber);
+    else unresolvedGroups.set(candidates.rawText, { rawText: candidates.rawText, options: candidates.options, rowNumbers: [r.rowNumber] });
+  }
+
   return (
-    <div className="mt-3 overflow-x-auto" tabIndex={0} role="region" aria-label="Import row detail, scroll horizontally for more columns">
-      {!rows ? (
-        <p className="text-xs text-content-muted">Loading rows…</p>
-      ) : (
-        <table className="w-full min-w-[480px] text-left text-xs">
-          <thead className="text-content-muted-strong dark:text-content-dark-muted">
-            <tr>
-              <th className="py-1 pr-3">#</th>
-              <th className="py-1 pr-3">Status</th>
-              <th className="py-1 pr-3">Reason</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border dark:divide-border-dark">
-            {rows.map((r) => (
-              <tr key={r.id}>
-                <td className="py-1 pr-3">{r.rowNumber}</td>
-                <td className="py-1 pr-3">{r.status}</td>
-                <td className="py-1 pr-3 text-content-muted dark:text-content-dark-muted">{r.reasonText ?? '—'}</td>
+    <div className="mt-3 flex flex-col gap-3">
+      {[...unresolvedGroups.values()].map((group) => (
+        <ResolveProjectPicker key={group.rawText} batchId={batchId} group={group} onResolved={reload} />
+      ))}
+      <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Import row detail, scroll horizontally for more columns">
+        {!rows ? (
+          <p className="text-xs text-content-muted">Loading rows…</p>
+        ) : (
+          <table className="w-full min-w-[480px] text-left text-xs">
+            <thead className="text-content-muted-strong dark:text-content-dark-muted">
+              <tr>
+                <th className="py-1 pr-3">#</th>
+                <th className="py-1 pr-3">Status</th>
+                <th className="py-1 pr-3">Reason</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+            </thead>
+            <tbody className="divide-y divide-border dark:divide-border-dark">
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <td className="py-1 pr-3">{r.rowNumber}</td>
+                  <td className="py-1 pr-3">{r.status}</td>
+                  <td className="py-1 pr-3 text-content-muted dark:text-content-dark-muted">{r.reasonText ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ResolveProjectPicker({
+  batchId,
+  group,
+  onResolved,
+}: {
+  batchId: string;
+  group: { rawText: string; options: { id: string; name: string }[]; rowNumbers: number[] };
+  onResolved: () => void;
+}) {
+  const { push } = useToast();
+  const [projectId, setProjectId] = useState('');
+  const resolve = useResolveLegacyImportProject();
+  return (
+    <div className="flex flex-wrap items-end gap-3 rounded border border-border bg-surface-muted p-3 dark:border-border-dark dark:bg-surface-dark-muted">
+      <div className="min-w-0">
+        <p className="text-xs font-medium">
+          "{group.rawText}" matches {group.options.length} Projects (row{group.rowNumbers.length > 1 ? 's' : ''} {group.rowNumbers.join(', ')})
+        </p>
+        <p className="text-xs text-content-muted dark:text-content-dark-muted">Pick the correct Project — it will apply to every row with this same text.</p>
+      </div>
+      <SelectField label="Project" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+        <option value="">Select…</option>
+        {group.options.map((o) => (
+          <option key={o.id} value={o.id}>
+            {o.name}
+          </option>
+        ))}
+      </SelectField>
+      <Button
+        disabled={!projectId || resolve.isPending}
+        onClick={async () => {
+          try {
+            await resolve.mutateAsync({ batchId, rawText: group.rawText, projectId });
+            push(`Mapped "${group.rawText}" — ${group.rowNumbers.length} row(s) re-processed.`, 'success');
+            onResolved();
+          } catch (err) {
+            push((err as { message?: string })?.message ?? 'Could not apply mapping', 'error');
+          }
+        }}
+      >
+        {resolve.isPending ? 'Applying…' : 'Apply mapping'}
+      </Button>
     </div>
   );
 }

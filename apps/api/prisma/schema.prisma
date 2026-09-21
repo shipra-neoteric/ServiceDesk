@@ -596,6 +596,12 @@ model LegacyImportBatch {
   id          String   @id @default(cuid()) @map("_id")
   sourceSheet String
   importedAt  DateTime @default(now())
+  // A real FMS export can be thousands of rows, each needing several sequential DB round trips —
+  // far too slow to run inside one HTTP request/response cycle. The upload endpoint creates the
+  // batch and returns immediately; processing continues in the background and the UI polls this
+  // status instead of holding the request open. PROCESSING | COMPLETED | FAILED.
+  status      String   @default("PROCESSING")
+  totalRows   Int      @default(0)
   imported    Int      @default(0)
   skipped     Int      @default(0)
   ambiguous   Int      @default(0)
@@ -603,6 +609,11 @@ model LegacyImportBatch {
   failed      Int      @default(0)
   warnings    String? // JSON-encoded string[]
   errors      String? // JSON-encoded [{row, reason}]
+  // JSON-encoded Record<normalizedPropertyText, projectId>. Populated when a user resolves an
+  // AMBIGUOUS-by-multiple-Project-candidates row via POST /:id/resolve-project; every later row in
+  // the same batch (and any manual re-resolve) whose property text normalizes the same way reuses
+  // this choice instead of asking again or guessing.
+  propertyMappings String?
 
   rows LegacyImportRow[]
 }
@@ -616,6 +627,10 @@ model LegacyImportRow {
   legacyRef        String? // dedupe key for idempotent re-import
   matchedJobCardId String? // set when IMPORTED or DUPLICATE (points at the existing/created JobCard)
   reasonText       String? // why SKIPPED/AMBIGUOUS/DUPLICATE/FAILED
+  // JSON-encoded {field, rawText, options: [{id, name}]} — set only when AMBIGUOUS because a field
+  // (currently "project") matched more than one active Master, so the UI can offer those exact
+  // candidates for the user to pick from via POST /:id/resolve-project.
+  candidatesJson   String?
   createdAt        DateTime @default(now())
 
   batch LegacyImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
