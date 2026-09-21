@@ -208,15 +208,20 @@ export const useUploadLegacyImport = () => {
       const form = new FormData();
       form.append('file', file);
       // The upload only has to wait for the CSV to be parsed and the batch row created — actual
-      // row-by-row processing happens after the response, in the background (see routes.ts) — so
-      // the default apiClient timeout is fine here; the UI then polls this batch's status.
+      // row-by-row processing happens after the response, in the background (see routes.ts). In
+      // practice that first write is also whatever request happens to be first to need a Prisma
+      // connection to MongoDB Atlas after a cold server start/deploy, which alone can take longer
+      // than apiClient's default 15s timeout — confirmed live: the browser was canceling this
+      // exact request at ~14s with no server response yet. A longer, upload-specific timeout
+      // (not raised globally, so other endpoints still fail fast) gives that cold connection room
+      // without masking a genuinely broken request elsewhere.
       //
       // Content-Type is intentionally left unset: multipart/form-data requires a `boundary=...`
       // parameter the browser generates for the actual FormData payload. Setting the header
       // manually (even to the "correct" MIME type) overrides that auto-generation and strips the
       // boundary, so the server can never find the file in the body — the request hangs with no
       // response until the client times out, surfacing as a generic network error.
-      return (await apiClient.post<LegacyImportBatch>('/legacy-import', form)).data;
+      return (await apiClient.post<LegacyImportBatch>('/legacy-import', form, { timeout: 60000 })).data;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['legacy-import'] }),
   });
