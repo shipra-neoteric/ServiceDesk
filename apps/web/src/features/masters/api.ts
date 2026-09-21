@@ -210,7 +210,13 @@ export const useUploadLegacyImport = () => {
       // The upload only has to wait for the CSV to be parsed and the batch row created — actual
       // row-by-row processing happens after the response, in the background (see routes.ts) — so
       // the default apiClient timeout is fine here; the UI then polls this batch's status.
-      return (await apiClient.post<LegacyImportBatch>('/legacy-import', form, { headers: { 'Content-Type': 'multipart/form-data' } })).data;
+      //
+      // Content-Type is intentionally left unset: multipart/form-data requires a `boundary=...`
+      // parameter the browser generates for the actual FormData payload. Setting the header
+      // manually (even to the "correct" MIME type) overrides that auto-generation and strips the
+      // boundary, so the server can never find the file in the body — the request hangs with no
+      // response until the client times out, surfacing as a generic network error.
+      return (await apiClient.post<LegacyImportBatch>('/legacy-import', form)).data;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['legacy-import'] }),
   });
